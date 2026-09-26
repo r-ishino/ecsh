@@ -1,0 +1,11 @@
+use anyhow::{Result, bail};
+
+use crate::config::Profile;
+
+pub fn ps(profile: &Profile) -> Result<()> {
+    eprintln!(
+        "対象: region={} cluster={}",
+        profile.region, profile.cluster
+    );
+    bail!("ps は未実装です")
+}

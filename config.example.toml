@@ -1,0 +1,17 @@
+# ecsh の設定ファイルの例。値はすべてダミー。
+# 既定の置き場所は $XDG_CONFIG_HOME/ecsh/config.toml（未設定なら ~/.config/ecsh/config.toml）。
+# `ecsh run <プロファイル名>` の <プロファイル名> が [profiles.<名前>] に対応する。
+
+[profiles.staging]
+region = "us-east-1"
+cluster = "example-staging"
+# ネットワーク設定（サブネット・セキュリティグループ）のコピー元にするサービス
+service = "worker"
+# exec で入るコンテナ
+container = "app"
+
+[profiles.production]
+region = "us-east-1"
+cluster = "example-production"
+service = "worker"
+container = "app"
