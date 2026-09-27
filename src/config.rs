@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -23,6 +23,9 @@ pub struct Profile {
     pub container: String,
     /// 環境変数 AWS_PROFILE が無いときに使う AWS プロファイル
     pub aws_profile: Option<String>,
+    /// タスクを起動する前に y/N を聞く
+    #[serde(default)]
+    pub confirm: bool,
 }
 
 impl Config {
@@ -34,7 +37,17 @@ impl Config {
     }
 
     fn parse(text: &str) -> Result<Self> {
-        Ok(toml::from_str(text)?)
+        let config: Self = toml::from_str(text)?;
+        if config.profiles.is_empty() {
+            bail!("設定ファイルにプロファイルが 1 つもありません");
+        }
+        Ok(config)
+    }
+
+    pub fn profiles(&self) -> impl Iterator<Item = (&str, &Profile)> {
+        self.profiles
+            .iter()
+            .map(|(name, profile)| (name.as_str(), profile))
     }
 
     pub fn profile(&self, name: &str) -> Result<&Profile> {
@@ -89,9 +102,38 @@ mod tests {
                 service: "worker".into(),
                 container: "app".into(),
                 aws_profile: Some("example".into()),
+                confirm: false,
             }
         );
-        assert_eq!(config.profile("production").unwrap().aws_profile, None);
+        let production = config.profile("production").unwrap();
+        assert_eq!(production.aws_profile, None);
+        assert!(production.confirm);
+    }
+
+    #[test]
+    fn confirm_defaults_to_false() {
+        let text = r#"
+            [profiles.staging]
+            region = "us-east-1"
+            cluster = "example-staging"
+            service = "worker"
+            container = "app"
+        "#;
+
+        assert!(
+            !Config::parse(text)
+                .unwrap()
+                .profile("staging")
+                .unwrap()
+                .confirm
+        );
+    }
+
+    #[test]
+    fn config_without_profiles_is_rejected() {
+        let message = Config::parse("[profiles]").unwrap_err().to_string();
+
+        assert!(message.contains("プロファイルが 1 つもありません"));
     }
 
     #[test]
