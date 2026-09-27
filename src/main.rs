@@ -5,6 +5,7 @@ mod cli;
 mod commands;
 mod config;
 mod ecs;
+mod history;
 mod logs;
 mod prompt;
 mod report;
@@ -89,6 +90,10 @@ async fn try_main() -> Result<ExitCode> {
         Command::Gc { profile, yes, .. } => {
             let (name, profile) = prompt::select_profile(&config, profile.as_deref())?;
             commands::gc(name, profile, yes).await?;
+        }
+        Command::Logs { profile, last } => {
+            let code = commands::logs(&config, profile.as_deref(), last).await?;
+            return Ok(ExitCode::from(code));
         }
     }
     Ok(ExitCode::SUCCESS)

@@ -6,6 +6,7 @@ use aws_sdk_ecs::Client;
 use aws_sdk_ecs::types::Task;
 
 use crate::ecs;
+use crate::history::Finish;
 use crate::logs::{LogStream, LogTail};
 use crate::ui::{self, Waiting};
 
@@ -29,6 +30,28 @@ pub struct Stopped {
     pub stopped_reason: Option<String>,
     /// コンテナが止まった理由（OutOfMemoryError など）
     pub container_reason: Option<String>,
+}
+
+impl Stopped {
+    /// 履歴に書く形。took は起動してから止まったと分かるまで
+    pub fn finish(&self, took: Duration) -> Finish {
+        Finish {
+            exit_code: self.exit_code,
+            stopped_reason: self.stopped_reason.clone(),
+            container_reason: self.container_reason.clone(),
+            took_seconds: took.as_secs(),
+        }
+    }
+}
+
+impl From<&Finish> for Stopped {
+    fn from(finish: &Finish) -> Self {
+        Self {
+            exit_code: finish.exit_code,
+            stopped_reason: finish.stopped_reason.clone(),
+            container_reason: finish.container_reason.clone(),
+        }
+    }
 }
 
 pub fn progress_from(task: &Task, container: &str) -> Progress {
@@ -76,6 +99,14 @@ impl<'a> Follower<'a> {
             container,
             logs,
             started: false,
+        }
+    }
+
+    /// コマンドがもう動いているタスクを見届ける。動き始めるのを待つ表示を出さない
+    pub fn already_started(self) -> Self {
+        Self {
+            started: true,
+            ..self
         }
     }
 

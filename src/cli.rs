@@ -64,6 +64,15 @@ pub enum Command {
         #[arg(last = true, value_name = "COMMAND")]
         command: Vec<String>,
     },
+    /// この Mac で run したものの履歴から選び、出力を見る。動いているものは終わるまで流す
+    Logs {
+        /// 設定ファイルの [profiles.<名前>]。省略すると一覧から選ぶ
+        profile: Option<String>,
+
+        /// 一覧を出さず、直近の 1 件を開く。プロファイルを省略したら、プロファイルを問わず直近
+        #[arg(long)]
+        last: bool,
+    },
 }
 
 #[cfg(test)]
@@ -219,6 +228,28 @@ mod tests {
             parse_run(&["ecsh", "run", "staging", "--"]).3,
             Vec::<String>::new()
         );
+    }
+
+    fn parse_logs(args: &[&str]) -> (Option<String>, bool) {
+        match Cli::try_parse_from(args).unwrap().command {
+            Command::Logs { profile, last } => (profile, last),
+            command => panic!("logs として解釈されない: {command:?}"),
+        }
+    }
+
+    #[test]
+    fn logs_profile_can_be_omitted_with_or_without_last() {
+        assert_eq!(parse_logs(&["ecsh", "logs"]), (None, false));
+        assert_eq!(parse_logs(&["ecsh", "logs", "--last"]), (None, true));
+        assert_eq!(
+            parse_logs(&["ecsh", "logs", "staging", "--last"]),
+            (Some("staging".into()), true)
+        );
+    }
+
+    #[test]
+    fn logs_does_not_accept_open_yet() {
+        assert!(Cli::try_parse_from(["ecsh", "logs", "--open"]).is_err());
     }
 
     #[test]

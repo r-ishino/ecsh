@@ -1,8 +1,9 @@
 use std::borrow::Cow;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use aws_sdk_ecs::Client;
+use chrono::Utc;
 
 use super::exec::StopAbandoned;
 use super::launch::{self, Prepared};
@@ -10,16 +11,17 @@ use crate::aws_error;
 use crate::aws_profile::AwsProfile;
 use crate::config::Profile;
 use crate::ecs::{self, LaunchedTask, Workload};
+use crate::history::{self, History};
 use crate::logs::{self, LogDestination, LogTail};
 use crate::prompt;
 use crate::report::report;
 use crate::signals::{Action, Interruption, Signals, Stage};
 use crate::ui::{self, Guidance, Style};
 
-mod follow;
-mod outcome;
+pub(super) mod follow;
+pub(super) mod outcome;
 
-use follow::Follower;
+use follow::{Follower, Stopped};
 
 const STOP_QUESTION: &str =
     "タスクを止めますか？ [y/N]（N なら手元だけ抜け、タスクは最後まで動きます） ";
@@ -71,6 +73,7 @@ pub async fn run(
     .await
     .map_err(explain)?;
     let launched_at = Instant::now();
+    let launched_on = Utc::now();
     report!(
         "{}",
         style.success(format!(
@@ -94,12 +97,28 @@ pub async fn run(
             ))
         ),
     }
+    let recorded = record_launch(history::Entry {
+        launched_at: launched_on,
+        profile: name.to_owned(),
+        region: profile.region.clone(),
+        cluster: profile.cluster.clone(),
+        aws_profile: aws_profile.name().map(str::to_owned),
+        container: profile.container.clone(),
+        task_arn: task.task_arn.clone(),
+        command: command.to_vec(),
+        log: match &destination {
+            LogDestination::Awslogs(stream) => Some(stream.clone()),
+            LogDestination::Unreadable(_) => None,
+        },
+        finish: None,
+    });
     if detach {
         report!(
             "{}",
             style.note("待たずに抜けます。タスクは最後まで動きます")
         );
-        for line in outcome::whereabouts_lines(style, name, &task.task_arn, &destination) {
+        for line in outcome::whereabouts_lines(style, name, &task.task_arn, &destination, recorded)
+        {
             report!("{line}");
         }
         return Ok(0);
@@ -137,18 +156,19 @@ pub async fn run(
                 profile_name: name,
                 destination: &destination,
                 aws_profile: &aws_profile,
+                launched_at,
+                recorded,
             };
             return interrupted
                 .handle(interruption, &mut signals, &mut follower)
                 .await;
         }
     };
-    for line in outcome::finished_lines(
-        style,
-        &stopped,
-        launched_at.elapsed(),
-        follower.missing_stream(),
-    ) {
+    let took = launched_at.elapsed();
+    if recorded {
+        record_finish(&task.task_arn, &stopped, took);
+    }
+    for line in outcome::finished_lines(style, &stopped, took, follower.missing_stream()) {
         report!("{line}");
     }
     Ok(outcome::exit_code(&stopped))
@@ -179,6 +199,32 @@ async fn log_destination(
     }
 }
 
+/// 書けなくても run は続ける。書けたかどうかを返す
+fn record_launch(entry: history::Entry) -> bool {
+    match History::open().and_then(|history| history.append(entry)) {
+        Ok(()) => true,
+        Err(error) => {
+            report!(
+                "{}",
+                Style::current().warning(format!("run の履歴に書けませんでした（{error:#}）"))
+            );
+            false
+        }
+    }
+}
+
+/// 見届けた結果を履歴に書く。書けなくても警告だけ出して続ける
+pub(super) fn record_finish(task_arn: &str, stopped: &Stopped, took: Duration) {
+    let recorded =
+        History::open().and_then(|history| history.record_finish(task_arn, stopped.finish(took)));
+    if let Err(error) = recorded {
+        report!(
+            "{}",
+            Style::current().warning(format!("run の結果を履歴に書けませんでした（{error:#}）"))
+        );
+    }
+}
+
 /// 見届けている途中で AWS を呼べなくなった。タスクは動き続けている
 fn lost_sight(error: anyhow::Error, task_arn: &str) -> anyhow::Error {
     Guidance::new(
@@ -196,6 +242,8 @@ struct Interrupted<'a> {
     profile_name: &'a str,
     destination: &'a LogDestination,
     aws_profile: &'a AwsProfile,
+    launched_at: Instant,
+    recorded: bool,
 }
 
 impl Interrupted<'_> {
@@ -257,6 +305,9 @@ impl Interrupted<'_> {
                 let stopped = stopped
                     .map_err(|error| aws_error::explain(error, self.aws_profile))
                     .map_err(|error| lost_sight(error, self.task_arn))?;
+                if self.recorded {
+                    record_finish(self.task_arn, &stopped, self.launched_at.elapsed());
+                }
                 report!(
                     "{}",
                     outcome::stopped_on_request_line(style, self.task_arn, &stopped)
@@ -286,9 +337,13 @@ impl Interrupted<'_> {
                 interruption.signal
             ))
         );
-        for line in
-            outcome::whereabouts_lines(style, self.profile_name, self.task_arn, self.destination)
-        {
+        for line in outcome::whereabouts_lines(
+            style,
+            self.profile_name,
+            self.task_arn,
+            self.destination,
+            self.recorded,
+        ) {
             report!("{line}");
         }
         interruption.signal.exit_code()
@@ -301,7 +356,7 @@ fn asks_to_stop(interruption: Interruption, stdin_is_terminal: bool) -> bool {
 }
 
 /// 確かめる用に、コマンドをシェルに貼れる形で 1 行にする
-fn command_line(command: &[String]) -> String {
+pub(super) fn command_line(command: &[String]) -> String {
     command
         .iter()
         .map(|arg| quote(arg))
