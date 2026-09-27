@@ -103,12 +103,13 @@ While `exec` is in a task, it holds an exclusive lock on `sessions/<task ID>.loc
 `ps` lists your tasks (`startedBy = ecsh/$USER`) in the profile's cluster that have not been told to stop. The table goes to stdout, so you can pipe it; notes and warnings go to stderr. It looks roughly like this:
 
 ```
-ID        接続      状態     起動から     タスク定義  自動停止まで
-0123abcd  接続中    RUNNING  12 分        worker:42   11 時間 48 分
-89abcdef  止め忘れ  RUNNING  2 時間 5 分  worker:42   9 時間 55 分
+ID        接続      状態     起動から     タスク定義  CPU     メモリ  自動停止まで
+0123abcd  接続中    RUNNING  12 分        worker:42   1 vCPU  2 GB    11 時間 48 分
+89abcdef  止め忘れ  RUNNING  2 時間 5 分  worker:42   2 vCPU  8 GB    9 時間 55 分
 ```
 
 - 接続 (connection) is 接続中 when `exec` on this machine is in the task, 止め忘れ (left behind) when its lock file remains but no `exec` holds it, 不明 (unknown) when there is no lock file (launched from another machine or by an older ecsh), and run for tasks that run a command and are not meant to be connected to
+- CPU and メモリ (memory) are the task's size, including a size overridden at launch (see [Task size](#task-size))
 - 起動から is the time since the task was launched; 自動停止まで is the time left until the 12-hour limit, counted from when the task started (─ while it is pending, and for run tasks)
 - Left-behind tasks are shown in yellow, followed by a hint to stop them with `ecsh gc`. For unknown tasks, 起動から turns yellow after 1 hour and red after 2 hours
 - With no tasks, `ps` prints a line to stderr and exits with 0
@@ -184,6 +185,32 @@ Without a profile name, `logs` first asks for a profile, the same as the other c
 `logs` exits with 0 once it has shown the run, whatever the command's exit code.
 
 The history lives in `history.jsonl` under the state directory (the same directory as `sessions/`). `run` adds a line each time it launches a task and records the exit code and time taken once it sees the task stop. Only the latest 100 runs are kept. `exec` is not recorded, since its task only runs `sleep`. Only runs launched from this machine are listed.
+
+### Task size
+
+By default, `exec` and `run` launch the task with the CPU and memory of the task definition. To change them for one launch, pick a size from a list:
+
+```sh
+ecsh exec --size   # choose the profile, then the size
+ecsh run --size -- bundle exec rake users:import
+```
+
+The list starts with "タスク定義のまま" (keep the task definition's size, shown with its current value), so Enter launches without changing anything. The other entries are 0.5 vCPU / 1 GB, 1 vCPU / 2 GB, 1 vCPU / 4 GB, 2 vCPU / 4 GB, 2 vCPU / 8 GB, 4 vCPU / 8 GB, and 4 vCPU / 16 GB. The list is built in and cannot be changed in the config.
+
+For a size that is not on the list, give it directly with `--cpu` (in vCPU, such as `2` or `0.5`) and `--memory` (with a unit, such as `8GB` or `512MB`; 1 GB = 1024 MiB):
+
+```sh
+ecsh exec --cpu 2 --memory 8GB
+ecsh run --memory 4GB -- bundle exec rake users:import   # the CPU stays as in the task definition
+```
+
+If you give only one of them, the other comes from the task definition. The combination is checked against the CPU and memory values Fargate supports before the task is launched, and a combination Fargate does not support is rejected with the allowed memory range for that CPU. Naming the profile works the same way (`ecsh exec staging --cpu 2 --memory 8GB`), and `--cpu` / `--memory` can be combined with `-y`.
+
+`--size` shows a list, so it cannot be combined with `-y`; it cannot be combined with `--cpu` / `--memory` either. It also needs stdin to be a terminal.
+
+The chosen size is shown before the y/N prompt and in the prompt itself. If it is the same as the task definition, nothing is overridden. Changing the size needs permission for `ecs:DescribeTaskDefinition`.
+
+If the task definition sets `memory` (the hard limit), `memoryReservation`, or `cpu` on the container in the profile, ecsh adjusts those values of that container to fit the new task size: the hard limit and `cpu` become the task's value minus what the other containers in the task (sidecars) set, and `memoryReservation` is lowered only when it no longer fits. Without this, a larger task would still be capped by the container's old hard limit, and a smaller task would be rejected because the containers would not fit. The other containers are left as they are. If the sidecars alone do not fit in the new size, ecsh fails before launching the task.
 
 ## Development
 

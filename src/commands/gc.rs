@@ -292,6 +292,8 @@ mod tests {
                 created_at: Some(SystemTime::UNIX_EPOCH),
                 started_at: None,
                 is_run: connection == ConnectionState::Run,
+                cpu: None,
+                memory: None,
             },
             connection,
         }

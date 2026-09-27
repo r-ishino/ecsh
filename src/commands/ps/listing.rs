@@ -288,6 +288,8 @@ mod tests {
             created_at: None,
             started_at: None,
             is_run,
+            cpu: None,
+            memory: None,
         }
     }
 

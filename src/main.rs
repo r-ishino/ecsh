@@ -12,6 +12,7 @@ mod report;
 mod session;
 mod session_lock;
 mod signals;
+mod size;
 mod ui;
 mod xdg;
 
@@ -67,18 +68,19 @@ async fn try_main() -> Result<ExitCode> {
     let config = Config::load(&config_path)?;
 
     match cli.command {
-        Command::Exec { profile, yes } => {
+        Command::Exec { profile, yes, size } => {
             let (name, profile) = prompt::select_profile(&config, profile.as_deref())?;
-            commands::exec(name, profile, yes).await?;
+            commands::exec(name, profile, yes, size.request()).await?;
         }
         Command::Run {
             profile,
             yes,
             detach,
             command,
+            size,
         } => {
             let (name, profile) = prompt::select_profile(&config, profile.as_deref())?;
-            let code = commands::run(name, profile, &command, yes, detach).await?;
+            let code = commands::run(name, profile, &command, yes, detach, size.request()).await?;
             return Ok(ExitCode::from(code));
         }
         Command::Ps { all: true, .. } => commands::ps_all(&config).await?,

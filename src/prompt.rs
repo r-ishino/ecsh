@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail};
 use inquire::{InquireError, MultiSelect, Select};
 
 use crate::config::{Config, Profile};
+use crate::size::{self, DefinedSize, TaskSize};
 
 /// 利用者が一覧や確認で操作を取りやめた
 #[derive(Debug, PartialEq, Eq)]
@@ -146,14 +147,41 @@ fn choice_labels(profiles: &[(&str, &Profile)]) -> Vec<String> {
         .collect()
 }
 
-/// タスクを起動する前に y/N を聞く。`yes` なら聞かない
-pub fn confirm_launch(name: &str, profile: &Profile, yes: bool) -> Result<()> {
-    confirm_launch_with(name, profile, yes, &mut Terminal)
+/// `--size` の一覧から大きさを選ばせる。先頭の「タスク定義のまま」なら None
+pub fn select_size(defined: DefinedSize) -> Result<Option<TaskSize>> {
+    select_size_with(defined, &mut Terminal)
+}
+
+fn select_size_with(defined: DefinedSize, console: &mut impl Console) -> Result<Option<TaskSize>> {
+    if !console.stdin_is_terminal() {
+        bail!(
+            "標準入力がターミナルではないため、大きさを一覧から選べません。--cpu / --memory で指定してください"
+        );
+    }
+    let items = std::iter::once(format!("タスク定義のまま（{defined}）"))
+        .chain(size::PRESETS.iter().map(ToString::to_string))
+        .collect();
+    match console.select("タスクの大きさを選んでください", items)? {
+        Some(0) => Ok(None),
+        Some(index) => Ok(Some(size::PRESETS[index - 1])),
+        None => Err(Abort::Cancelled("大きさの選択を取りやめました").into()),
+    }
+}
+
+/// タスクを起動する前に y/N を聞く。`yes` なら聞かない。size はタスク定義から変えるときだけ渡す
+pub fn confirm_launch(
+    name: &str,
+    profile: &Profile,
+    size: Option<TaskSize>,
+    yes: bool,
+) -> Result<()> {
+    confirm_launch_with(name, profile, size, yes, &mut Terminal)
 }
 
 fn confirm_launch_with(
     name: &str,
     profile: &Profile,
+    size: Option<TaskSize>,
     yes: bool,
     console: &mut impl Console,
 ) -> Result<()> {
@@ -166,8 +194,9 @@ fn confirm_launch_with(
         );
     }
 
+    let size = size.map_or(String::new(), |size| format!(" {size} で"));
     let answer = console.read_line(&format!(
-        "{name}（cluster={} service={}）で使い捨てタスクを起動します。よろしいですか？ [y/N] ",
+        "{name}（cluster={} service={}）で使い捨てタスクを{size}起動します。よろしいですか？ [y/N] ",
         profile.cluster, profile.service
     ))?;
     if is_yes(&answer) {
@@ -351,7 +380,7 @@ mod tests {
         for (name, profile) in config.profiles() {
             let mut console = FakeConsole::answering("y\n");
 
-            confirm_launch_with(name, profile, false, &mut console).unwrap();
+            confirm_launch_with(name, profile, None, false, &mut console).unwrap();
 
             assert!(console.asked.is_some(), "{name}");
         }
@@ -365,6 +394,7 @@ mod tests {
         confirm_launch_with(
             "production",
             config.profile("production").unwrap(),
+            None,
             true,
             &mut console,
         )
@@ -380,6 +410,7 @@ mod tests {
         let message = confirm_launch_with(
             "production",
             config.profile("production").unwrap(),
+            None,
             false,
             &mut FakeConsole::default(),
         )
@@ -398,6 +429,7 @@ mod tests {
         confirm_launch_with(
             "production",
             config.profile("production").unwrap(),
+            None,
             false,
             &mut console,
         )
@@ -407,6 +439,80 @@ mod tests {
             console.asked.unwrap(),
             "production（cluster=example-production service=worker）で使い捨てタスクを起動します。よろしいですか？ [y/N] "
         );
+    }
+
+    #[test]
+    fn confirmation_names_the_size_when_it_differs_from_the_task_definition() {
+        let config = config();
+        let mut console = FakeConsole::answering("y\n");
+        let size = TaskSize {
+            cpu: "2".parse().unwrap(),
+            memory: "8GB".parse().unwrap(),
+        };
+
+        confirm_launch_with(
+            "production",
+            config.profile("production").unwrap(),
+            Some(size),
+            false,
+            &mut console,
+        )
+        .unwrap();
+
+        assert_eq!(
+            console.asked.unwrap(),
+            "production（cluster=example-production service=worker）で使い捨てタスクを 2 vCPU / 8 GB で起動します。よろしいですか？ [y/N] "
+        );
+    }
+
+    const DEFINED: DefinedSize = DefinedSize {
+        cpu: Some(crate::size::Cpu::from_units(1024)),
+        memory: Some(crate::size::Memory::from_mib(2048)),
+    };
+
+    #[test]
+    fn size_list_starts_with_the_task_definition_size_then_the_presets() {
+        let mut console = FakeConsole {
+            selection: Some(0),
+            ..FakeConsole::terminal()
+        };
+
+        let chosen = select_size_with(DEFINED, &mut console).unwrap();
+
+        assert_eq!(chosen, None);
+        let items = console.shown_items.unwrap();
+        assert_eq!(items[0], "タスク定義のまま（1 vCPU / 2 GB）");
+        assert_eq!(&items[1..], size::PRESETS.map(|p| p.to_string()));
+    }
+
+    #[test]
+    fn choosing_a_preset_returns_that_size() {
+        let mut console = FakeConsole {
+            selection: Some(5),
+            ..FakeConsole::terminal()
+        };
+
+        assert_eq!(
+            select_size_with(DEFINED, &mut console).unwrap(),
+            Some(size::PRESETS[4])
+        );
+    }
+
+    #[test]
+    fn size_list_without_terminal_is_an_error_suggesting_cpu_and_memory() {
+        let message = select_size_with(DEFINED, &mut FakeConsole::default())
+            .unwrap_err()
+            .to_string();
+
+        assert!(message.contains("--cpu / --memory"), "{message}");
+    }
+
+    #[test]
+    fn escaping_the_size_list_cancels_with_exit_code_1() {
+        let abort = abort_of(select_size_with(DEFINED, &mut FakeConsole::terminal()));
+
+        assert_eq!(abort, Abort::Cancelled("大きさの選択を取りやめました"));
+        assert_eq!(abort.exit_code(), 1);
     }
 
     #[test]
@@ -420,6 +526,7 @@ mod tests {
             let abort = abort_of(confirm_launch_with(
                 "production",
                 production,
+                None,
                 false,
                 &mut console,
             ));

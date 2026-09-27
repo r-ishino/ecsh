@@ -16,6 +16,7 @@ use crate::logs::{self, LogDestination, LogTail};
 use crate::prompt;
 use crate::report::report;
 use crate::signals::{Action, Interruption, Signals, Stage};
+use crate::size::SizeRequest;
 use crate::ui::{self, Guidance, Style};
 
 pub(super) mod follow;
@@ -44,6 +45,7 @@ pub async fn run(
     command: &[String],
     yes: bool,
     detach: bool,
+    size_request: SizeRequest,
 ) -> Result<u8> {
     let style = Style::current();
     let Prepared {
@@ -51,10 +53,12 @@ pub async fn run(
         client,
         snapshot,
         started_by,
+        size,
     } = launch::prepare(
         name,
         profile,
         yes,
+        size_request,
         Some(format!("コマンド  {}", style.bold(command_line(command)))),
     )
     .await?;
@@ -69,6 +73,7 @@ pub async fn run(
         &snapshot,
         &started_by,
         Workload::Command(command),
+        size.as_ref(),
     )
     .await
     .map_err(explain)?;
