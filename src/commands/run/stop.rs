@@ -1,7 +1,11 @@
+use std::fmt;
+
 use anyhow::Result;
 use aws_sdk_ecs::Client;
 
 use crate::ecs;
+use crate::report::report;
+use crate::signals::{Interruption, Signal, Signals, Stage};
 
 /// 起動したタスクを止め、タスクを使っていた間の結果 `used` と StopTask の結果をまとめて返す
 pub async fn stop_after(
@@ -9,13 +13,53 @@ pub async fn stop_after(
     cluster: &str,
     task_arn: &str,
     used: Result<()>,
+    signals: &mut Signals,
 ) -> Result<()> {
-    let stopped = ecs::stop_task(client, cluster, task_arn).await;
+    let stage = match used
+        .as_ref()
+        .err()
+        .and_then(|e| e.downcast_ref::<Interruption>())
+    {
+        Some(interruption) => {
+            report!(
+                "{} を受けたので、タスクを止めてから終了します（もう一度 Ctrl-C を押すと待たずに終了します）",
+                interruption.signal
+            );
+            Stage::StoppingOnSignal
+        }
+        None => Stage::Stopping,
+    };
+    let stopped = signals
+        .watch(stage, ecs::stop_task(client, cluster, task_arn))
+        .await
+        .map_err(|interruption| StopAbandoned {
+            task_arn: task_arn.to_owned(),
+            signal: interruption.signal,
+        })?;
     if stopped.is_ok() {
-        eprintln!("タスクを止めました: {task_arn}");
+        report!("タスクを止めました: {task_arn}");
     }
     conclude(used, stopped, task_arn)
 }
+
+/// StopTask の応答を待たずに終了した。タスクは残っているかもしれない
+#[derive(Debug)]
+pub struct StopAbandoned {
+    task_arn: String,
+    pub signal: Signal,
+}
+
+impl fmt::Display for StopAbandoned {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "タスクを止めるのを待たずに終了しました: {}。`ecsh gc` で止められます",
+            self.task_arn
+        )
+    }
+}
+
+impl std::error::Error for StopAbandoned {}
 
 fn conclude(used: Result<()>, stopped: Result<()>, task_arn: &str) -> Result<()> {
     let Err(stop_error) = stopped else {
