@@ -1,71 +1,71 @@
 # ecsh
 
-Amazon ECS で使い捨てのタスクを起動し、ECS Exec で入り、抜けたらタスクを止める CLI。
+A CLI that launches a one-off task on Amazon ECS, drops you into it with ECS Exec, and stops the task when you exit.
 
-> **開発中**: いまは `run` が使い捨てタスクを起動するところまでです。まだ入れず、自動でも止めないので、起動したタスクは AWS コンソールか CLI で止めてください（止め損ねても 12 時間で止まります）。
+> **Work in progress**: `run` currently only launches the one-off task. It does not drop you into the task yet, and it does not stop the task automatically, so stop the launched task yourself from the AWS console or CLI (if you forget, it stops on its own after 12 hours).
 
-## 目的
+## Why
 
-ECS 上のアプリケーションでバッチやコンソールを手で動かすとき、「使い捨てタスクを起動する」「exec できるようになるまで待つ」「入る」「終わったら止める」を別々に行うと、次のことが起きます。
+When you run a batch job or a console by hand for an application on ECS, doing "launch a one-off task", "wait until exec is available", "get in", and "stop it when done" as separate steps leads to the following:
 
-- タスクが RUNNING になっても ExecuteCommandAgent が起動するまでは exec できず、いつ入れるかが分からない
-- 抜けたあともタスクが動き続け、止め忘れる
-- 同じクラスタで動いている常駐タスクに入ってしまう余地がある
+- Even after the task is RUNNING, you cannot exec into it until the ExecuteCommandAgent has started, so you don't know when you can get in
+- The task keeps running after you exit, and you forget to stop it
+- You might end up in a long-running task that happens to be running in the same cluster
 
-ecsh はこれを 1 コマンドにまとめます。
+ecsh combines these into a single command:
 
-- ExecuteCommandAgent が RUNNING になるのを待ち、なったら自動で入る
-- 入る先は、自分が起動したタスクに固定する
-- 抜けたらタスクを止める。ecsh が異常終了したときに備え、タスクは起動から 12 時間で自動的に止まるようにする
+- It waits for the ExecuteCommandAgent to become RUNNING, then gets you in automatically
+- It only ever connects to the task it launched
+- It stops the task when you exit. In case ecsh terminates abnormally, the task is set to stop on its own 12 hours after it starts
 
-## 必要なもの
+## Requirements
 
-- Rust（ビルド用）
-- AWS の認証情報（通常の AWS SDK と同じ解決順）
+- Rust (to build)
+- AWS credentials (resolved the same way as the standard AWS SDK)
 - [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
-- 対象の ECS サービスで ECS Exec が有効になっていること
+- ECS Exec enabled on the target ECS service
 
-## インストール
+## Installation
 
 ```sh
 cargo install --git https://github.com/r-ishino/ecsh
 ```
 
-## 設定
+## Configuration
 
-`$XDG_CONFIG_HOME/ecsh/config.toml`（未設定なら `~/.config/ecsh/config.toml`）に置きます。`--config <PATH>` で別の場所も指定できます。
+Put the config at `$XDG_CONFIG_HOME/ecsh/config.toml` (or `~/.config/ecsh/config.toml` if unset). You can point to a different location with `--config <PATH>`.
 
-[config.example.toml](config.example.toml) を写して値を書き換えてください。
+Copy [config.example.toml](config.example.toml) and edit the values.
 
 ```toml
 [profiles.staging]
 region = "us-east-1"
 cluster = "example-staging"
-service = "worker"   # ネットワーク設定のコピー元にするサービス
-container = "app"    # exec で入るコンテナ
-aws_profile = "example"  # 省略可
-confirm = true           # 省略可。true なら起動前に y/N を聞く
+service = "worker"   # service to copy the network configuration from
+container = "app"    # container to exec into
+aws_profile = "example"  # optional
+confirm = true           # optional; if true, ask y/N before launching
 ```
 
-AWS プロファイルは次の順で決まります。`run` は使ったプロファイルとその出どころを表示します。
+The AWS profile is chosen in the following order. `run` prints the profile it used and where it came from.
 
-1. 環境変数 `AWS_PROFILE`
-2. 設定の `aws_profile`
-3. どちらも無ければ AWS SDK の既定の解決順
+1. The `AWS_PROFILE` environment variable
+2. `aws_profile` in the config
+3. If neither is set, the AWS SDK's default resolution order
 
-## 使い方
+## Usage
 
 ```sh
-ecsh run staging   # 使い捨てタスクを起動して入る。抜けたら止める
-ecsh ps staging    # ecsh が起動したタスクのうち、動いているものを一覧する
-ecsh gc staging    # 残ってしまった ecsh のタスクを止める
+ecsh run staging   # launch a one-off task and get in; stop it when you exit
+ecsh ps staging    # list the tasks launched by ecsh that are still running
+ecsh gc staging    # stop leftover ecsh tasks
 ```
 
-プロファイル名を省略すると、設定のプロファイルを一覧で出します。↑↓ と Enter で選びます（Esc で取りやめ）。標準入力がターミナルでないときは一覧を出せないので、名前を指定してください。
+If you omit the profile name, the profiles in the config are shown as a list. Pick one with ↑↓ and Enter (Esc to cancel). The list cannot be shown when stdin is not a terminal, so pass the name in that case.
 
-`confirm = true` のプロファイルでは、`run` がタスクを起動する前に y/N を聞きます。`y` か `yes` 以外なら起動しません。`--yes`（`-y`）で確認を省けます。標準入力がターミナルでなく `--yes` も無いときは、起動せずにエラーになります。
+For a profile with `confirm = true`, `run` asks y/N before launching the task. Anything other than `y` or `yes` cancels the launch. `--yes` (`-y`) skips the prompt. When stdin is not a terminal and `--yes` is not given, it fails with an error instead of launching.
 
-## 開発
+## Development
 
 ```sh
 cargo build
