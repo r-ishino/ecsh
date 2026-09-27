@@ -2,6 +2,7 @@
 # 既定の置き場所は $XDG_CONFIG_HOME/ecsh/config.toml（未設定なら ~/.config/ecsh/config.toml）。
 # `ecsh run <プロファイル名>` の <プロファイル名> が [profiles.<名前>] に対応する。
 # 名前を省略すると、ここに並べたプロファイルから一覧で選べる。
+# どのプロファイルでも、タスクを起動する前に必ず y/N を聞く。`--yes` で省略できる。
 
 [profiles.staging]
 region = "us-east-1"
@@ -19,5 +20,3 @@ region = "us-east-1"
 cluster = "example-production"
 service = "worker"
 container = "app"
-# 省略可（既定は false）。true なら、タスクを起動する前に y/N を聞く。`--yes` で省略できる
-confirm = true

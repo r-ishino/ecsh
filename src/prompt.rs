@@ -118,7 +118,7 @@ fn choice_labels(profiles: &[(&str, &Profile)]) -> Vec<String> {
         .collect()
 }
 
-/// `confirm = true` のプロファイルなら、タスクを起動する前に y/N を聞く
+/// タスクを起動する前に y/N を聞く。`yes` なら聞かない
 pub fn confirm_launch(name: &str, profile: &Profile, yes: bool) -> Result<()> {
     confirm_launch_with(name, profile, yes, &mut Terminal)
 }
@@ -129,12 +129,12 @@ fn confirm_launch_with(
     yes: bool,
     console: &mut impl Console,
 ) -> Result<()> {
-    if !profile.confirm || yes {
+    if yes {
         return Ok(());
     }
     if !console.stdin_is_terminal() {
         bail!(
-            "プロファイル `{name}` は起動前の確認が要りますが、標準入力がターミナルではありません。確認を省くには --yes を付けてください"
+            "起動前に y/N を聞きますが、標準入力がターミナルではありません。確認を省くには --yes を付けてください"
         );
     }
 
@@ -169,7 +169,6 @@ mod tests {
         cluster = "example-production"
         service = "worker"
         container = "app"
-        confirm = true
     "#;
 
     /// 呼ばれた内容を記録し、決めておいた答えを返す
@@ -291,19 +290,16 @@ mod tests {
     }
 
     #[test]
-    fn profile_without_confirm_is_launched_without_asking() {
+    fn every_profile_is_confirmed_before_launch() {
         let config = config();
-        let mut console = FakeConsole::terminal();
 
-        confirm_launch_with(
-            "staging",
-            config.profile("staging").unwrap(),
-            false,
-            &mut console,
-        )
-        .unwrap();
+        for (name, profile) in config.profiles() {
+            let mut console = FakeConsole::answering("y\n");
 
-        assert_eq!(console.asked, None);
+            confirm_launch_with(name, profile, false, &mut console).unwrap();
+
+            assert!(console.asked.is_some(), "{name}");
+        }
     }
 
     #[test]
