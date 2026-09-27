@@ -54,26 +54,51 @@ The AWS profile is chosen in the following order. `exec` prints the profile it u
 ## Usage
 
 ```sh
-ecsh exec staging  # launch a one-off task and get in; stop it when you exit
-ecsh run staging -- bundle exec rake db:migrate:status  # run a command as a one-off task and stream its output
-ecsh ps staging    # list the tasks launched by ecsh that are still running
+ecsh exec          # choose a profile, launch a one-off task and get in; stop it when you exit
+ecsh run -- bundle exec rake db:migrate:status  # choose a profile, run a command as a one-off task and stream its output
+ecsh ps            # choose a profile, list the tasks launched by ecsh that are still running
 ecsh ps --all      # the same, across every profile in the config
-ecsh gc staging    # choose leftover ecsh tasks and stop them
+ecsh gc            # choose a profile, then leftover ecsh tasks, and stop them
 ecsh gc --all      # the same, across every profile in the config
 ecsh logs          # choose a profile, then one of your past runs, and show its output
 ecsh logs --last   # show the output of your latest run, whatever the profile
 ecsh open          # choose a profile, then one of your running tasks, and open it in the AWS console
 ```
 
+Each command starts by showing the profiles in the config as a list, with the cluster and service of each (`--all` and `logs --last` skip it, since they are not about one profile). Pick one with ↑↓ and Enter; typing narrows the list, and Esc cancels with exit status 1. The list cannot be shown when stdin is not a terminal; pass the profile name in that case (see below).
+
+### Passing the profile name
+
+You can put the profile name right after the command. It skips the profile list, which is also how to use ecsh when stdin is not a terminal, such as from a script, where it is often combined with `--yes` (`-y`):
+
+```sh
+ecsh exec staging
+ecsh exec staging --cpu 2 --memory 8GB -y        # --cpu / --memory work with -y (see Task size)
+ecsh run -y staging -- bundle exec rake db:migrate:status
+ecsh run -y -d staging -- bundle exec rake users:import
+ecsh ps staging
+ecsh gc staging --yes                            # stop the left-behind and unknown tasks without the checklist
+ecsh logs staging                                # choose from the runs of staging
+ecsh logs staging --last                         # open the latest run of staging
+ecsh open staging
+```
+
+The name cannot be combined with `--all`. The rest of this README omits the name; everything works the same with it.
+
+### exec
+
 `exec` starts `/bin/sh` in the container, with the profile name in the prompt (`[staging] /app # `). When you exit the shell, ecsh stops the task. Even if the session ends abnormally (for example, the connection drops), ecsh still stops the task and exits with 0 as long as stopping succeeds; it only prints the session's exit status.
 
 `exec` prints its progress to stderr (in Japanese). It looks roughly like this:
 
 ```
+> プロファイルを選んでください staging  example-staging / worker
+
   staging  →  example-staging / worker / app
   AWS  example（設定の aws_profile）· us-east-1
   ネットワーク  subnet-01234567… · sg-01234567… · パブリック IP なし
 
+staging（cluster=example-staging service=worker）で使い捨てタスクを起動します。よろしいですか？ [y/N] y
 ✓ タスクを起動しました  0123abcd（worker:42）
   12 時間後に自動で止まります · startedBy ecsh/alice
 ✓ 入れるようになりました（45 秒）
@@ -95,15 +120,16 @@ Signals after the task has been launched:
 
 Before the task is launched, Ctrl-C simply exits.
 
-If you omit the profile name, the profiles in the config are shown as a list. Pick one with ↑↓ and Enter (Esc to cancel). The list cannot be shown when stdin is not a terminal, so pass the name in that case.
-
 `exec` always asks y/N before launching the task, for every profile. Anything other than `y` or `yes` cancels the launch. `--yes` (`-y`) skips the prompt. When stdin is not a terminal and `--yes` is not given, it fails with an error instead of launching.
 
 While `exec` is in a task, it holds an exclusive lock on `sessions/<task ID>.lock` under the state directory (`$XDG_STATE_HOME/ecsh`, or `~/.local/state/ecsh` when `XDG_STATE_HOME` is unset), and removes the file when it exits. This marks the task as in use from this machine. If the file cannot be created, `exec` prints a warning and carries on.
 
-`ps` lists your tasks (`startedBy = ecsh/$USER`) in the profile's cluster that have not been told to stop. The table goes to stdout, so you can pipe it; notes and warnings go to stderr. It looks roughly like this:
+### ps
+
+`ps` lists your tasks (`startedBy = ecsh/$USER`) in the profile's cluster that have not been told to stop. The table goes to stdout, so you can pipe it; notes and warnings go to stderr, as does the profile list. It looks roughly like this:
 
 ```
+> プロファイルを選んでください staging  example-staging / worker
 ID        接続      状態     起動から     タスク定義  CPU     メモリ  自動停止まで
 0123abcd  接続中    RUNNING  12 分        worker:42   1 vCPU  2 GB    11 時間 48 分
 89abcdef  止め忘れ  RUNNING  2 時間 5 分  worker:42   2 vCPU  8 GB    9 時間 55 分
@@ -112,10 +138,12 @@ ID        接続      状態     起動から     タスク定義  CPU     メ�
 - 接続 (connection) is 接続中 when `exec` on this machine is in the task, 止め忘れ (left behind) when its lock file remains but no `exec` holds it, 不明 (unknown) when there is no lock file (launched from another machine or by an older ecsh), and run for tasks that run a command and are not meant to be connected to
 - CPU and メモリ (memory) are the task's size, including a size overridden at launch (see [Task size](#task-size))
 - 起動から is the time since the task was launched; 自動停止まで is the time left until the 12-hour limit, counted from when the task started (─ while it is pending, and for run tasks)
-- Left-behind tasks are shown in yellow, followed by a hint to stop them with `ecsh gc`. For unknown tasks, 起動から turns yellow after 1 hour and red after 2 hours
+- Left-behind tasks are shown in yellow, followed by a hint to stop them with `ecsh gc` (the hint names the profile). For unknown tasks, 起動から turns yellow after 1 hour and red after 2 hours
 - With no tasks, `ps` prints a line to stderr and exits with 0
 
 `ps --all` goes through every profile in parallel and adds a profile column. Profiles that point to the same region, cluster, and AWS profile are asked only once, under the name that comes first. A profile that fails (for example, an expired SSO session) is reported on stderr and skipped; `ps --all` fails only when every profile fails. When every profile succeeds, `ps --all` also removes lock files that no `exec` holds and whose tasks are no longer running.
+
+### gc
 
 `gc` stops the tasks ecsh left behind, for example after ecsh was killed with `kill -9`, the machine lost power, or StopTask failed (they stop on their own after 12 hours anyway). It looks at the same tasks as `ps` and shows them as a checklist on stderr:
 
@@ -126,7 +154,7 @@ ID        接続      状態     起動から     タスク定義  CPU     メ�
 
 `gc` stops the tasks one by one with the reason `ecsh gc`, without waiting for them to reach STOPPED, and prints `✓` or `✗` for each. If some of them fail, it still tries the rest and exits with 1 at the end. It also removes the lock files of the tasks it stopped.
 
-`--yes` (`-y`) skips the checklist and stops the left-behind and unknown tasks; it never stops run tasks. When stdin is not a terminal and `--yes` is not given, `gc` fails with an error without stopping anything.
+`--yes` (`-y`) skips the checklist and stops the left-behind and unknown tasks; it never stops run tasks. It does not skip the profile list; name the profile or use `--all` to run it without one. When stdin is not a terminal and `--yes` is not given, `gc` fails with an error without stopping anything.
 
 `gc --all` goes through every profile the same way as `ps --all` and puts all tasks in one checklist, with the profile name at the start of each item. `gc --all --yes` works too, which suits periodic cleanup: it leaves tasks in use and run tasks alone. As with `ps --all`, when every profile succeeds it also removes lock files that no `exec` holds and whose tasks are no longer running.
 
@@ -134,20 +162,20 @@ All of `gc`'s output goes to stderr.
 
 ### run
 
-`ecsh run [profile] -- <command...>` launches a one-off task whose container command is the command after `--`. The arguments are passed as they are, without a shell, so the command becomes the container's main process and receives the SIGTERM that StopTask sends. The task stops by itself when the command ends; there is no time limit. The network configuration and the other launch settings are copied from the service, the same as `exec`.
+`ecsh run -- <command...>` asks for a profile, then launches a one-off task whose container command is the command after `--`. The arguments are passed as they are, without a shell, so the command becomes the container's main process and receives the SIGTERM that StopTask sends. The task stops by itself when the command ends; there is no time limit. The network configuration and the other launch settings are copied from the service, the same as `exec`.
 
 ```sh
-ecsh run staging -- bundle exec rake db:migrate:status
-ecsh run staging -- bundle exec rake 'users:import[2026-09-01,dry]'  # quote [ ] (zsh expands them)
-ecsh run staging -- bundle exec rake users:import LIMIT=10            # rake takes KEY=VALUE as environment variables
-ecsh run staging -- env LIMIT=10 bin/import                           # otherwise, use env
-ecsh run staging -- sh -c 'bin/prepare && bundle exec rake users:import'
-ecsh run -d staging -- bundle exec rake users:import                  # launch it and leave
+ecsh run -- bundle exec rake db:migrate:status
+ecsh run -- bundle exec rake 'users:import[2026-09-01,dry]'  # quote [ ] (zsh expands them)
+ecsh run -- bundle exec rake users:import LIMIT=10           # rake takes KEY=VALUE as environment variables
+ecsh run -- env LIMIT=10 bin/import                          # otherwise, use env
+ecsh run -- sh -c 'bin/prepare && bundle exec rake users:import'
+ecsh run -d -- bundle exec rake users:import                 # launch it and leave
 ```
 
 When you need `&&`, pipes, or other shell syntax, wrap the command in `sh -c` yourself. In that case the shell is the main process and does not pass SIGTERM on to the command, so stopping the task kills the command without letting it clean up (after the stop timeout).
 
-`run` asks y/N before launching, the same as `exec` (`--yes` / `-y` skips it). Running `ecsh run staging` without a command launches nothing and points you to `ecsh exec staging`.
+`run` asks y/N before launching, the same as `exec` (`--yes` / `-y` skips it). Running `ecsh run` without a command launches nothing and points you to `ecsh exec`; it says so before asking for a profile.
 
 By default, `run` waits for the command to finish:
 
@@ -176,7 +204,7 @@ ecsh logs         # choose a profile, then a run from its history
 ecsh logs --last  # open the latest run right away, whatever the profile
 ```
 
-Without a profile name, `logs` first asks for a profile, the same as the other commands, then lists that profile's runs, newest first, with the launch time, the result (終了 <exit code>, or 未確認 when ecsh has not seen the task stop), the time taken, and the command. Pick one with ↑↓ and Enter (Esc cancels with exit status 1). Passing the name (`ecsh logs staging`) skips the profile list; `ecsh logs staging --last` opens the latest run of that profile. The list cannot be shown when stdin is not a terminal; use `--last` in that case. With no runs to show, `logs` says so and exits with 0.
+`logs` first asks for a profile, the same as the other commands, then lists that profile's runs, newest first, with the launch time, the result (終了 <exit code>, or 未確認 when ecsh has not seen the task stop), the time taken, and the command. Pick one with ↑↓ and Enter (Esc cancels with exit status 1). The list cannot be shown when stdin is not a terminal; use `--last` in that case. With no runs to show, `logs` says so and exits with 0.
 
 - A run that has finished: its whole output goes to stdout, followed by its exit code and time taken on stderr
 - A run that is still going: the output is streamed the same way as when `run` waits, and the exit code is shown when the task stops. Ctrl-C (or closing the terminal, or SIGTERM) only stops watching; the task keeps running, and `logs` exits with 128 + the signal number
@@ -199,9 +227,9 @@ ecsh open --logs  # skip the last choice and open the logs (CloudWatch Logs)
 ecsh open --task  # skip the last choice and open the task details (ECS)
 ```
 
-Without a profile name, `open` first asks for a profile, the same as the other commands, then lists the same tasks as `ps` with the task ID, the connection, the status, the time since launch, and the task definition. With a single task, the list is skipped; with none, `open` says so and exits with 0. Passing the name (`ecsh open staging`) skips the profile list.
+`open` first asks for a profile, the same as the other commands, then lists the same tasks as `ps` with the task ID, the connection, the status, the time since launch, and the task definition. With a single task, the list is skipped; with none, `open` says so and exits with 0.
 
-For a run task, `open` then asks whether to open the task details or the logs. A task launched by `exec` only runs `sleep`, so its logs are empty: `open` goes straight to the task details, and `--logs` is an error. When the container does not use `awslogs` (with `awslogs-group` and `awslogs-stream-prefix`), the logs cannot be opened, and `open` goes to the task details. The lists cannot be shown when stdin is not a terminal; pass the profile name, and `--task` or `--logs` for a run task.
+For a run task, `open` then asks whether to open the task details or the logs. A task launched by `exec` only runs `sleep`, so its logs are empty: `open` goes straight to the task details, and `--logs` is an error. When the container does not use `awslogs` (with `awslogs-group` and `awslogs-stream-prefix`), the logs cannot be opened: `open` goes to the task details, and `--logs` is an error. The lists cannot be shown when stdin is not a terminal; pass the profile name (see [Passing the profile name](#passing-the-profile-name)), and `--task` or `--logs` for a run task. With more than one task, `open` fails in that case.
 
 `open` prints the URL to stderr and passes it to macOS's `open` command, which opens it in your default browser. Only running tasks are listed; to open the logs of a run that has finished, use `ecsh logs --open`.
 
@@ -222,10 +250,10 @@ For a size that is not on the list, give it directly with `--cpu` (in vCPU, such
 
 ```sh
 ecsh exec --cpu 2 --memory 8GB
-ecsh run --memory 4GB -- bundle exec rake users:import   # the CPU stays as in the task definition
+ecsh run --memory 4GB -- bundle exec rake users:import       # the CPU stays as in the task definition
 ```
 
-If you give only one of them, the other comes from the task definition. The combination is checked against the CPU and memory values Fargate supports before the task is launched, and a combination Fargate does not support is rejected with the allowed memory range for that CPU. Naming the profile works the same way (`ecsh exec staging --cpu 2 --memory 8GB`), and `--cpu` / `--memory` can be combined with `-y`.
+If you give only one of them, the other comes from the task definition. The combination is checked against the CPU and memory values Fargate supports before the task is launched, and a combination Fargate does not support is rejected with the allowed memory range for that CPU. `--cpu` / `--memory` can be combined with `-y`.
 
 `--size` shows a list, so it cannot be combined with `-y`; it cannot be combined with `--cpu` / `--memory` either. It also needs stdin to be a terminal.
 
