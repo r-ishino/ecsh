@@ -55,6 +55,7 @@ The AWS profile is chosen in the following order. `exec` prints the profile it u
 ```sh
 ecsh exec staging  # launch a one-off task and get in; stop it when you exit
 ecsh ps staging    # list the tasks launched by ecsh that are still running
+ecsh ps --all      # the same, across every profile in the config
 ecsh gc staging    # stop leftover ecsh tasks
 ```
 
@@ -93,6 +94,21 @@ If you omit the profile name, the profiles in the config are shown as a list. Pi
 `exec` always asks y/N before launching the task, for every profile. Anything other than `y` or `yes` cancels the launch. `--yes` (`-y`) skips the prompt. When stdin is not a terminal and `--yes` is not given, it fails with an error instead of launching.
 
 While `exec` is in a task, it holds an exclusive lock on `sessions/<task ID>.lock` under the state directory (`$XDG_STATE_HOME/ecsh`, or `~/.local/state/ecsh` when `XDG_STATE_HOME` is unset), and removes the file when it exits. This marks the task as in use from this machine. If the file cannot be created, `exec` prints a warning and carries on.
+
+`ps` lists your tasks (`startedBy = ecsh/$USER`) in the profile's cluster that have not been told to stop. The table goes to stdout, so you can pipe it; notes and warnings go to stderr. It looks roughly like this:
+
+```
+ID        接続      状態     起動から     タスク定義  自動停止まで
+0123abcd  接続中    RUNNING  12 分        worker:42   11 時間 48 分
+89abcdef  止め忘れ  RUNNING  2 時間 5 分  worker:42   9 時間 55 分
+```
+
+- 接続 (connection) is 接続中 when `exec` on this machine is in the task, 止め忘れ (left behind) when its lock file remains but no `exec` holds it, 不明 (unknown) when there is no lock file (launched from another machine or by an older ecsh), and run for tasks that run a command and are not meant to be connected to
+- 起動から is the time since the task was launched; 自動停止まで is the time left until the 12-hour limit, counted from when the task started (─ while it is pending, and for run tasks)
+- Left-behind tasks are shown in yellow, followed by a hint to stop them with `ecsh gc`. For unknown tasks, 起動から turns yellow after 1 hour and red after 2 hours
+- With no tasks, `ps` prints a line to stderr and exits with 0
+
+`ps --all` goes through every profile in parallel and adds a profile column. Profiles that point to the same region, cluster, and AWS profile are asked only once, under the name that comes first. A profile that fails (for example, an expired SSO session) is reported on stderr and skipped; `ps --all` fails only when every profile fails. When every profile succeeds, `ps --all` also removes lock files that no `exec` holds and whose tasks are no longer running.
 
 `ecsh run` no longer gets you into a task; it launches nothing and points you to `ecsh exec`. It is reserved for a future subcommand that runs a command as the task's command.
 

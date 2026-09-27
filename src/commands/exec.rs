@@ -174,7 +174,7 @@ fn hold_session_lock(task_arn: &str) -> Option<SessionLock> {
     }
 }
 
-fn current_user() -> Result<String> {
+pub(super) fn current_user() -> Result<String> {
     match env::var("USER") {
         Ok(user) => Ok(user),
         Err(VarError::NotPresent) => bail!("環境変数 USER が設定されていません"),
