@@ -14,7 +14,7 @@ use crate::report::report;
 use crate::session_lock;
 use crate::ui::{self, Style};
 
-use super::exec::current_user;
+use super::launch::current_user;
 use super::ps::listing::{self, ConnectionState, ListedTask, Scope};
 
 /// そのプロファイルのクラスタで、自分が ecsh で起動して残ったタスクを選んで止める

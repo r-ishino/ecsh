@@ -45,10 +45,7 @@ pub async fn stop_after(
             ecs::stop_task(client, cluster, task_arn, ecs::STOP_REASON),
         )
         .await
-        .map_err(|interruption| StopAbandoned {
-            task_arn: task_arn.to_owned(),
-            signal: interruption.signal,
-        })?
+        .map_err(|interruption| StopAbandoned::new(task_arn, interruption.signal))?
         .map_err(|error| aws_error::explain(error, aws_profile));
     if stopped.is_ok() {
         report!("{}", style.success(stopped_message(task_arn, in_session)));
@@ -61,6 +58,15 @@ pub async fn stop_after(
 pub struct StopAbandoned {
     task_arn: String,
     pub signal: Signal,
+}
+
+impl StopAbandoned {
+    pub fn new(task_arn: &str, signal: Signal) -> Self {
+        Self {
+            task_arn: task_arn.to_owned(),
+            signal,
+        }
+    }
 }
 
 impl fmt::Display for StopAbandoned {

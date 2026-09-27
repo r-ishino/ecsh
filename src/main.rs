@@ -5,6 +5,7 @@ mod cli;
 mod commands;
 mod config;
 mod ecs;
+mod logs;
 mod prompt;
 mod report;
 mod session;
@@ -28,8 +29,9 @@ use crate::ui::Style;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let Err(error) = try_main().await else {
-        return ExitCode::SUCCESS;
+    let error = match try_main().await {
+        Ok(code) => return code,
+        Err(error) => error,
     };
     if let Some(abort) = error.downcast_ref::<Abort>() {
         if let Some(message) = abort.message() {
@@ -48,10 +50,14 @@ async fn main() -> ExitCode {
     ExitCode::FAILURE
 }
 
-async fn try_main() -> Result<()> {
+async fn try_main() -> Result<ExitCode> {
     let cli = Cli::parse();
-    if let Command::Run { args } = &cli.command {
-        return commands::run(args);
+    if let Command::Run {
+        profile, command, ..
+    } = &cli.command
+        && command.is_empty()
+    {
+        return Err(commands::missing_command(profile.as_deref()));
     }
     let config_path = match cli.config {
         Some(path) => path,
@@ -62,18 +68,28 @@ async fn try_main() -> Result<()> {
     match cli.command {
         Command::Exec { profile, yes } => {
             let (name, profile) = prompt::select_profile(&config, profile.as_deref())?;
-            commands::exec(name, profile, yes).await
+            commands::exec(name, profile, yes).await?;
         }
-        Command::Ps { all: true, .. } => commands::ps_all(&config).await,
+        Command::Run {
+            profile,
+            yes,
+            detach,
+            command,
+        } => {
+            let (name, profile) = prompt::select_profile(&config, profile.as_deref())?;
+            let code = commands::run(name, profile, &command, yes, detach).await?;
+            return Ok(ExitCode::from(code));
+        }
+        Command::Ps { all: true, .. } => commands::ps_all(&config).await?,
         Command::Ps { profile, .. } => {
             let (name, profile) = prompt::select_profile(&config, profile.as_deref())?;
-            commands::ps(name, profile).await
+            commands::ps(name, profile).await?;
         }
-        Command::Gc { all: true, yes, .. } => commands::gc_all(&config, yes).await,
+        Command::Gc { all: true, yes, .. } => commands::gc_all(&config, yes).await?,
         Command::Gc { profile, yes, .. } => {
             let (name, profile) = prompt::select_profile(&config, profile.as_deref())?;
-            commands::gc(name, profile, yes).await
+            commands::gc(name, profile, yes).await?;
         }
-        Command::Run { .. } => unreachable!("設定を読む前に案内して終えている"),
     }
+    Ok(ExitCode::SUCCESS)
 }

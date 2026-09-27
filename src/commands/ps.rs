@@ -11,7 +11,7 @@ use crate::report::report;
 use crate::session_lock;
 use crate::ui::{self, Style};
 
-use super::exec::current_user;
+use super::launch::current_user;
 
 pub(super) mod listing;
 mod table;

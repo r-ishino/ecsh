@@ -96,7 +96,7 @@ impl Style {
     }
 
     /// `✗ ...`。失敗の要約
-    fn failure(self, message: impl Display) -> String {
+    pub fn failure(self, message: impl Display) -> String {
         format!("{} {message}", self.red("✗"))
     }
 
@@ -210,11 +210,14 @@ enum WaitingDisplay {
 
 impl Waiting {
     /// heading は待っている内容、limit はスピナーを出さないときに見出しに添える上限
-    pub fn start(heading: &str, limit: &str) -> Self {
+    pub fn start(heading: &str, limit: Option<&str>) -> Self {
         let display = if color_enabled() {
             WaitingDisplay::Spinner(spinner(heading))
         } else {
-            report!("{heading}（{limit}）");
+            match limit {
+                Some(limit) => report!("{heading}（{limit}）"),
+                None => report!("{heading}"),
+            }
             WaitingDisplay::Lines(ChangedLines::default())
         };
         Self {
