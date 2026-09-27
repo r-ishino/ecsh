@@ -2,8 +2,6 @@
 
 A CLI that launches a one-off task on Amazon ECS, drops you into it with ECS Exec, and stops the task when you exit.
 
-> **Work in progress**: signals are not handled yet. If ecsh is interrupted before you get in (Ctrl-C while waiting) or the terminal is closed, the task is not stopped right away; it stops on its own 12 hours after it starts.
-
 ## Why
 
 When you run a batch job or a console by hand for an application on ECS, doing "launch a one-off task", "wait until exec is available", "get in", and "stop it when done" as separate steps leads to the following:
@@ -62,6 +60,14 @@ ecsh gc staging    # stop leftover ecsh tasks
 ```
 
 `run` starts `/bin/sh` in the container, with the profile name in the prompt (`[staging] /app # `). When you exit the shell, ecsh stops the task. Even if the session ends abnormally (for example, the connection drops), ecsh still stops the task and exits with 0 as long as stopping succeeds; it only prints the session's exit status.
+
+Signals after the task has been launched:
+
+- Ctrl-C, closing the terminal (SIGHUP), or SIGTERM while waiting to get in stops the task, then exits
+- Ctrl-C during the session goes to the command running in the container and does not end ecsh. Closing the terminal or SIGTERM ends the session, stops the task, then exits
+- Pressing Ctrl-C again while ecsh is stopping the task after a signal exits without waiting. The task may be left running; stop it with `ecsh gc`
+
+Before the task is launched, Ctrl-C simply exits.
 
 If you omit the profile name, the profiles in the config are shown as a list. Pick one with ↑↓ and Enter (Esc to cancel). The list cannot be shown when stdin is not a terminal, so pass the name in that case.
 

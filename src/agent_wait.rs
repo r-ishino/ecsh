@@ -5,6 +5,8 @@ use aws_sdk_ecs::Client;
 use aws_sdk_ecs::operation::describe_tasks::DescribeTasksOutput;
 use aws_sdk_ecs::types::ManagedAgentName;
 
+use crate::report::report;
+
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
 const TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
@@ -15,7 +17,7 @@ pub async fn wait_until_exec_ready(
     task_arn: &str,
     container: &str,
 ) -> Result<String> {
-    eprintln!("ExecuteCommandAgent の起動を待っています（上限 5 分）");
+    report!("ExecuteCommandAgent の起動を待っています（上限 5 分）");
     let started = Instant::now();
     let mut previous: Option<Observation> = None;
     loop {
@@ -25,11 +27,11 @@ pub async fn wait_until_exec_ready(
             .as_ref()
             .is_none_or(|p| p.status_changed(&observation))
         {
-            eprintln!("{}", status_line(elapsed, &observation));
+            report!("{}", status_line(elapsed, &observation));
         }
         match next_step(&observation, elapsed)? {
             Progress::Ready => {
-                eprintln!("ExecuteCommandAgent が RUNNING になりました");
+                report!("ExecuteCommandAgent が RUNNING になりました");
                 return observation.runtime_id.with_context(|| {
                     format!(
                         "DescribeTasks の応答にコンテナ `{container}` の runtimeId がありません"

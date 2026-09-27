@@ -74,6 +74,14 @@ pub async fn wait(child: &mut Child) -> Result<ExitStatus> {
         .with_context(|| format!("{PLUGIN} の終了を待てません"))
 }
 
+/// session-manager-plugin を SIGKILL で終わらせる。先に終わっていても構わない
+pub async fn kill(child: &mut Child) -> Result<()> {
+    child
+        .kill()
+        .await
+        .with_context(|| format!("{PLUGIN} を終了できません"))
+}
+
 fn execute_command_request(
     client: &Client,
     target: &Target<'_>,

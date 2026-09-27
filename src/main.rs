@@ -5,7 +5,9 @@ mod commands;
 mod config;
 mod ecs;
 mod prompt;
+mod report;
 mod session;
+mod signals;
 
 use std::process::ExitCode;
 
@@ -13,26 +15,32 @@ use anyhow::Result;
 use clap::Parser;
 
 use crate::cli::{Cli, Command};
+use crate::commands::StopAbandoned;
 use crate::config::Config;
 use crate::prompt::Abort;
+use crate::report::report;
+use crate::signals::Interruption;
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let Err(error) = try_main().await else {
         return ExitCode::SUCCESS;
     };
-    match error.downcast_ref::<Abort>() {
-        Some(abort) => {
-            if let Some(message) = abort.message() {
-                eprintln!("{message}");
-            }
-            ExitCode::from(abort.exit_code())
+    if let Some(abort) = error.downcast_ref::<Abort>() {
+        if let Some(message) = abort.message() {
+            report!("{message}");
         }
-        None => {
-            eprintln!("Error: {error:?}");
-            ExitCode::FAILURE
-        }
+        return ExitCode::from(abort.exit_code());
     }
+    if let Some(interruption) = error.downcast_ref::<Interruption>() {
+        return ExitCode::from(interruption.signal.exit_code());
+    }
+    if let Some(abandoned) = error.downcast_ref::<StopAbandoned>() {
+        report!("{abandoned}");
+        return ExitCode::from(abandoned.signal.exit_code());
+    }
+    report!("Error: {error:?}");
+    ExitCode::FAILURE
 }
 
 async fn try_main() -> Result<()> {
