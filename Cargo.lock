@@ -853,12 +853,14 @@ dependencies = [
  "aws-sdk-ecs",
  "aws-sdk-sso",
  "clap",
+ "futures-util",
  "indicatif",
  "inquire",
  "serde",
  "serde_json",
  "tokio",
  "toml",
+ "unicode-width",
 ]
 
 [[package]]

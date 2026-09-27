@@ -1,4 +1,4 @@
-//! exec の出力の見た目。色と記号を付け、状態の更新をスピナー 1 行にまとめる
+//! 出力の見た目。色と記号を付け、状態の更新をスピナー 1 行にまとめる
 
 use std::env;
 use std::ffi::OsStr;
@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressState, ProgressStyle};
+use unicode_width::UnicodeWidthStr;
 
 use crate::report::report;
 
@@ -20,6 +21,14 @@ pub fn color_enabled() -> bool {
             env::var_os("NO_COLOR").as_deref(),
         )
     })
+}
+
+/// stdout に色を出すかどうか。ps の一覧はパイプで後段に渡すので、stderr とは別に決める
+fn stdout_color_enabled() -> bool {
+    should_color(
+        io::stdout().is_terminal(),
+        env::var_os("NO_COLOR").as_deref(),
+    )
 }
 
 /// NO_COLOR は https://no-color.org/ に従い、空でない値が入っているときだけ効く
@@ -37,9 +46,19 @@ impl Style {
     #[cfg(test)]
     pub const PLAIN: Self = Self { color: false };
 
+    #[cfg(test)]
+    pub const COLOR: Self = Self { color: true };
+
     pub fn current() -> Self {
         Self {
             color: color_enabled(),
+        }
+    }
+
+    /// stdout に出す行のための Style
+    pub fn for_stdout() -> Self {
+        Self {
+            color: stdout_color_enabled(),
         }
     }
 
@@ -59,7 +78,7 @@ impl Style {
         self.paint("2", text)
     }
 
-    fn red(self, text: impl Display) -> String {
+    pub fn red(self, text: impl Display) -> String {
         self.paint("31", text)
     }
 
@@ -67,7 +86,7 @@ impl Style {
         self.paint("32", text)
     }
 
-    fn yellow(self, text: impl Display) -> String {
+    pub fn yellow(self, text: impl Display) -> String {
         self.paint("33", text)
     }
 
@@ -102,12 +121,22 @@ impl Style {
         let summary = chain.next().unwrap_or_default();
         let mut lines = vec![self.failure(summary)];
         lines.extend(remedies_for(error).map(|remedy| self.remedy(remedy)));
-        lines.extend(
-            chain
-                .flat_map(|cause| cause.lines().map(str::to_owned).collect::<Vec<_>>())
-                .map(|cause| self.note(cause)),
-        );
+        lines.extend(self.cause_lines(chain));
         lines
+    }
+
+    /// 処理を続けられた失敗を「! 見出し → 対処 → エラーの連鎖（薄く）」の行にする
+    pub fn warning_lines(self, headline: impl Display, error: &anyhow::Error) -> Vec<String> {
+        let mut lines = vec![self.warning(headline)];
+        lines.extend(remedies_for(error).map(|remedy| self.remedy(remedy)));
+        lines.extend(self.cause_lines(error.chain().map(ToString::to_string)));
+        lines
+    }
+
+    fn cause_lines(self, causes: impl Iterator<Item = String>) -> impl Iterator<Item = String> {
+        causes
+            .flat_map(|cause| cause.lines().map(str::to_owned).collect::<Vec<_>>())
+            .map(move |cause| self.note(cause))
     }
 }
 
@@ -279,6 +308,11 @@ pub fn duration(elapsed: Duration) -> String {
     }
 }
 
+/// 端末で占める幅。全角の文字は 2 と数える
+pub fn display_width(text: &str) -> usize {
+    UnicodeWidthStr::width(text)
+}
+
 /// `arn:aws:ecs:<region>:<account>:task/<cluster>/<ID>` → `<ID>`
 pub fn task_id(task_arn: &str) -> &str {
     task_arn.rsplit('/').next().unwrap_or(task_arn)
@@ -314,7 +348,7 @@ mod tests {
 
     use super::*;
 
-    const COLOR: Style = Style { color: true };
+    const COLOR: Style = Style::COLOR;
     const PLAIN: Style = Style::PLAIN;
 
     #[test]
@@ -434,6 +468,32 @@ mod tests {
         let error = Err::<(), _>(anyhow!("a\nb")).context("要約").unwrap_err();
 
         assert_eq!(PLAIN.error_lines(&error), ["✗ 要約", "  a", "  b"]);
+    }
+
+    #[test]
+    fn warning_lines_show_headline_then_remedy_then_the_whole_error_chain() {
+        let error = Guidance::new("セッションが切れています", "ログインしてください")
+            .wrap(anyhow!("expired token"))
+            .context("ListTasks に失敗しました");
+
+        assert_eq!(
+            PLAIN.warning_lines("staging を飛ばします", &error),
+            [
+                "! staging を飛ばします",
+                "  ログインしてください",
+                "  ListTasks に失敗しました",
+                "  セッションが切れています",
+                "  expired token",
+            ]
+        );
+    }
+
+    #[test]
+    fn display_width_counts_full_width_characters_as_two() {
+        assert_eq!(display_width("RUNNING"), 7);
+        assert_eq!(display_width("止め忘れ"), 8);
+        assert_eq!(display_width("1 時間 3 分"), 11);
+        assert_eq!(display_width("─"), 1);
     }
 
     #[test]

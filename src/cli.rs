@@ -29,6 +29,10 @@ pub enum Command {
     Ps {
         /// 設定ファイルの [profiles.<名前>]。省略すると一覧から選ぶ
         profile: Option<String>,
+
+        /// 設定の全プロファイルを回って 1 つの表にまとめる
+        #[arg(long, conflicts_with = "profile")]
+        all: bool,
     },
     /// 残ってしまった ecsh のタスクを止める
     Gc {
@@ -73,7 +77,7 @@ mod tests {
 
             let profile = match cli.command {
                 Command::Exec { profile, .. }
-                | Command::Ps { profile }
+                | Command::Ps { profile, .. }
                 | Command::Gc { profile } => profile,
                 command => panic!("{subcommand} として解釈されない: {command:?}"),
             };
@@ -97,6 +101,21 @@ mod tests {
     fn yes_is_only_accepted_by_exec() {
         assert!(Cli::try_parse_from(["ecsh", "ps", "--yes"]).is_err());
         assert!(Cli::try_parse_from(["ecsh", "gc", "-y"]).is_err());
+    }
+
+    #[test]
+    fn ps_all_lists_every_profile_instead_of_a_named_one() {
+        let parse_all = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command {
+            Command::Ps { profile, all } => (profile, all),
+            command => panic!("ps として解釈されない: {command:?}"),
+        };
+
+        assert_eq!(parse_all(&["ecsh", "ps", "--all"]), (None, true));
+        assert_eq!(
+            parse_all(&["ecsh", "ps", "staging"]),
+            (Some("staging".into()), false)
+        );
+        assert!(Cli::try_parse_from(["ecsh", "ps", "staging", "--all"]).is_err());
     }
 
     #[test]

@@ -63,7 +63,6 @@ impl Drop for SessionLock {
 
 /// タスクにこの Mac の ecsh が入っているか
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(test), expect(dead_code, reason = "ps（R-14）/ gc（R-16）が使う"))]
 pub enum Connection {
     /// ロックをほかのプロセスが持っている
     Connected,
@@ -73,13 +72,11 @@ pub enum Connection {
     Unknown,
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "ps（R-14）が使う"))]
 pub fn connection(sessions_dir: &Path, task_id: &str) -> Result<Connection> {
     probe(&lock_path(sessions_dir, task_id), |_| Ok(()))
 }
 
 /// 持ち主のいないロックファイルを消す。返すのは消す前の状態で、消したのは `Abandoned` のときだけ
-#[cfg_attr(not(test), expect(dead_code, reason = "ps（R-14）/ gc（R-16）が使う"))]
 pub fn remove_if_abandoned(sessions_dir: &Path, task_id: &str) -> Result<Connection> {
     probe(&lock_path(sessions_dir, task_id), |path| {
         match fs::remove_file(path) {
@@ -89,6 +86,35 @@ pub fn remove_if_abandoned(sessions_dir: &Path, task_id: &str) -> Result<Connect
         }
         .with_context(|| format!("ロックファイルを消せません: {}", path.display()))
     })
+}
+
+/// ロックファイルのあるタスクの ID。ディレクトリがまだ無ければ空
+pub fn task_ids(sessions_dir: &Path) -> Result<Vec<String>> {
+    let entries = match fs::read_dir(sessions_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(anyhow::Error::new(error).context(format!(
+                "ディレクトリを読めません: {}",
+                sessions_dir.display()
+            )));
+        }
+    };
+    let mut ids = Vec::new();
+    for entry in entries {
+        let path = entry
+            .with_context(|| format!("ディレクトリを読めません: {}", sessions_dir.display()))?
+            .path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "lock")
+            && let Some(id) = path.file_stem().and_then(|stem| stem.to_str())
+        {
+            ids.push(id.to_owned());
+        }
+    }
+    ids.sort();
+    Ok(ids)
 }
 
 /// ロックを取れるか試す。取れたら、持ったまま `on_abandoned` を呼んでから外す
@@ -247,5 +273,23 @@ mod tests {
             Connection::Unknown
         );
         assert!(lock_path(&dir, TASK_ID).exists());
+    }
+
+    #[test]
+    fn task_ids_are_the_names_of_lock_files() {
+        let dir = temp_sessions_dir();
+        leave_abandoned_lock_file(&dir);
+        let _lock = SessionLock::acquire(&dir, "fedcba98").unwrap();
+        File::create(dir.join("notes.txt")).unwrap();
+
+        assert_eq!(
+            task_ids(&dir).unwrap(),
+            ["0123456789abcdef0123456789abcdef", "fedcba98"]
+        );
+    }
+
+    #[test]
+    fn no_task_ids_before_the_directory_exists() {
+        assert!(task_ids(&temp_sessions_dir()).unwrap().is_empty());
     }
 }

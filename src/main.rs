@@ -64,8 +64,10 @@ async fn try_main() -> Result<()> {
             let (name, profile) = prompt::select_profile(&config, profile.as_deref())?;
             commands::exec(name, profile, yes).await
         }
-        Command::Ps { profile } => {
-            commands::ps(prompt::select_profile(&config, profile.as_deref())?.1)
+        Command::Ps { all: true, .. } => commands::ps_all(&config).await,
+        Command::Ps { profile, .. } => {
+            let (name, profile) = prompt::select_profile(&config, profile.as_deref())?;
+            commands::ps(name, profile).await
         }
         Command::Gc { profile } => {
             commands::gc(prompt::select_profile(&config, profile.as_deref())?.1)

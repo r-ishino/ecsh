@@ -1,13 +1,17 @@
+use std::time::SystemTime;
+
 use anyhow::{Context, Result, bail};
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_ecs::Client;
 use aws_sdk_ecs::operation::describe_services::DescribeServicesOutput;
+use aws_sdk_ecs::operation::describe_tasks::DescribeTasksOutput;
 use aws_sdk_ecs::operation::run_task::RunTaskOutput;
 use aws_sdk_ecs::operation::run_task::builders::RunTaskFluentBuilder;
 use aws_sdk_ecs::operation::stop_task::builders::StopTaskFluentBuilder;
+use aws_sdk_ecs::primitives::DateTime;
 use aws_sdk_ecs::types::{
     AwsVpcConfiguration, CapacityProviderStrategyItem, ContainerOverride, LaunchType,
-    NetworkConfiguration, TaskOverride,
+    NetworkConfiguration, Task, TaskField, TaskOverride,
 };
 
 use crate::aws_profile::AwsProfile;
@@ -110,6 +114,9 @@ fn family_of(task_definition_arn: &str) -> Result<&str> {
 
 /// 使い捨てタスクのコンテナのコマンド。ecsh が止め損ねても、12 時間で終了してタスクが止まる
 pub const KEEPALIVE_COMMAND: [&str; 2] = ["sleep", "43200"];
+
+/// `KEEPALIVE_COMMAND` の sleep の秒数
+pub const KEEPALIVE_SECONDS: u64 = 43_200;
 
 /// ecsh が起動したタスクの startedBy。ps / gc はこの値で自分のタスクを絞り込む
 pub fn started_by(user: &str) -> Result<String> {
@@ -226,9 +233,113 @@ fn stop_task_request(client: &Client, cluster: &str, task_arn: &str) -> StopTask
         .reason(STOP_REASON)
 }
 
+/// run（R-19）が流しているタスクに付くタグ。exec のタスクには付かない
+const MODE_TAG_KEY: &str = "ecsh:mode";
+const RUN_MODE: &str = "run";
+
+/// DescribeTasks に一度に渡せるタスクの上限
+const DESCRIBE_TASKS_LIMIT: usize = 100;
+
+/// ecsh が起動して、まだ止める指示を受けていないタスク
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwnTask {
+    pub task_arn: String,
+    pub last_status: String,
+    pub task_definition_arn: String,
+    /// RunTask を受け付けた時刻
+    pub created_at: Option<SystemTime>,
+    /// コンテナが動き始めた時刻。12 時間の sleep はここから数える。PENDING の間は無い
+    pub started_at: Option<SystemTime>,
+    /// run が流しているタスク。接続しないのが正常
+    pub is_run: bool,
+}
+
+/// クラスタで startedBy が `started_by` のタスクを、ListTasks → DescribeTasks で取る
+pub async fn list_own_tasks(
+    client: &Client,
+    cluster: &str,
+    started_by: &str,
+) -> Result<Vec<OwnTask>> {
+    let mut task_arns = Vec::new();
+    let mut next_token = None;
+    loop {
+        // startedBy を指定するとほかの絞り込み条件と併用できないので、クラスタと startedBy だけで絞る
+        let output = client
+            .list_tasks()
+            .cluster(cluster)
+            .started_by(started_by)
+            .set_next_token(next_token)
+            .send()
+            .await
+            .with_context(|| format!("ListTasks に失敗しました（cluster={cluster}）"))?;
+        task_arns.extend(output.task_arns().iter().cloned());
+        next_token = output.next_token().map(str::to_owned);
+        if next_token.is_none() {
+            break;
+        }
+    }
+
+    let mut tasks = Vec::with_capacity(task_arns.len());
+    for chunk in task_arns.chunks(DESCRIBE_TASKS_LIMIT) {
+        let output = client
+            .describe_tasks()
+            .cluster(cluster)
+            .set_tasks(Some(chunk.to_vec()))
+            .include(TaskField::Tags)
+            .send()
+            .await
+            .with_context(|| format!("DescribeTasks に失敗しました（cluster={cluster}）"))?;
+        tasks.extend(own_tasks_from(output)?);
+    }
+    Ok(tasks)
+}
+
+fn own_tasks_from(output: DescribeTasksOutput) -> Result<Vec<OwnTask>> {
+    // ListTasks の後に止まって消えたタスクは MISSING で返る。もう動いていないので一覧から外すだけでよい
+    if let Some(failure) = output
+        .failures()
+        .iter()
+        .find(|failure| failure.reason() != Some("MISSING"))
+    {
+        bail!(
+            "タスクを取得できません（arn={} reason={} detail={}）",
+            failure.arn().unwrap_or("-"),
+            failure.reason().unwrap_or("-"),
+            failure.detail().unwrap_or("-")
+        );
+    }
+    output.tasks().iter().map(own_task_from).collect()
+}
+
+fn own_task_from(task: &Task) -> Result<OwnTask> {
+    let task_arn = task
+        .task_arn()
+        .context("DescribeTasks の応答にタスクの ARN がありません")?;
+    Ok(OwnTask {
+        task_arn: task_arn.to_owned(),
+        last_status: task.last_status().unwrap_or("-").to_owned(),
+        task_definition_arn: task
+            .task_definition_arn()
+            .with_context(|| format!("タスク {task_arn} にタスク定義の ARN がありません"))?
+            .to_owned(),
+        created_at: task.created_at().and_then(system_time),
+        started_at: task.started_at().and_then(system_time),
+        is_run: task
+            .tags()
+            .iter()
+            .any(|tag| tag.key() == Some(MODE_TAG_KEY) && tag.value() == Some(RUN_MODE)),
+    })
+}
+
+fn system_time(date_time: &DateTime) -> Option<SystemTime> {
+    SystemTime::try_from(*date_time).ok()
+}
+
 #[cfg(test)]
 mod tests {
-    use aws_sdk_ecs::types::{AssignPublicIp, Failure, Service, Task};
+    use std::time::Duration;
+
+    use aws_sdk_ecs::types::{AssignPublicIp, Failure, Service, Tag};
 
     use super::*;
 
@@ -489,5 +600,97 @@ mod tests {
             .to_string();
 
         assert!(message.contains("awsvpc"));
+    }
+
+    #[test]
+    fn keepalive_seconds_match_the_sleep_command() {
+        assert_eq!(KEEPALIVE_COMMAND[1], KEEPALIVE_SECONDS.to_string());
+    }
+
+    const TASK_ARN: &str = "arn:aws:ecs:us-east-1:123456789012:task/c/0123456789abcdef";
+
+    fn described(task: Task) -> DescribeTasksOutput {
+        DescribeTasksOutput::builder().tasks(task).build()
+    }
+
+    fn running_task() -> aws_sdk_ecs::types::builders::TaskBuilder {
+        Task::builder()
+            .task_arn(TASK_ARN)
+            .task_definition_arn(TASK_DEFINITION)
+            .last_status("RUNNING")
+    }
+
+    #[test]
+    fn own_task_carries_status_task_definition_and_times() {
+        let created = DateTime::from_secs(1_700_000_000);
+        let started = DateTime::from_secs(1_700_000_030);
+        let output = described(
+            running_task()
+                .created_at(created)
+                .started_at(started)
+                .build(),
+        );
+
+        assert_eq!(
+            own_tasks_from(output).unwrap(),
+            [OwnTask {
+                task_arn: TASK_ARN.into(),
+                last_status: "RUNNING".into(),
+                task_definition_arn: TASK_DEFINITION.into(),
+                created_at: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
+                started_at: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_030)),
+                is_run: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn pending_task_has_no_start_time() {
+        let output = described(running_task().last_status("PENDING").build());
+
+        assert_eq!(own_tasks_from(output).unwrap()[0].started_at, None);
+    }
+
+    #[test]
+    fn task_tagged_with_run_mode_is_a_run_task() {
+        let tag = |key: &str, value: &str| Tag::builder().key(key).value(value).build();
+        let is_run = |tags: Vec<Tag>| {
+            let output = described(running_task().set_tags(Some(tags)).build());
+            own_tasks_from(output).unwrap()[0].is_run
+        };
+
+        assert!(is_run(vec![tag("team", "x"), tag("ecsh:mode", "run")]));
+        assert!(!is_run(vec![]));
+        assert!(!is_run(vec![tag("ecsh:mode", "exec")]));
+        assert!(!is_run(vec![tag("mode", "run")]));
+    }
+
+    #[test]
+    fn task_that_disappeared_after_listing_is_left_out() {
+        let output = DescribeTasksOutput::builder()
+            .tasks(running_task().build())
+            .failures(
+                Failure::builder()
+                    .arn("arn:aws:ecs:us-east-1:123456789012:task/c/gone")
+                    .reason("MISSING")
+                    .build(),
+            )
+            .build();
+
+        let tasks = own_tasks_from(output).unwrap();
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].task_arn, TASK_ARN);
+    }
+
+    #[test]
+    fn other_describe_tasks_failure_is_an_error_with_reason() {
+        let output = DescribeTasksOutput::builder()
+            .failures(Failure::builder().reason("ACCESS_DENIED").build())
+            .build();
+
+        let message = own_tasks_from(output).unwrap_err().to_string();
+
+        assert!(message.contains("ACCESS_DENIED"), "{message}");
     }
 }
