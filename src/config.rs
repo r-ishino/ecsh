@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
-use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
+
+use crate::xdg;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -59,26 +60,10 @@ impl Config {
 }
 
 pub fn default_path() -> Result<PathBuf> {
-    resolve_default_path(
-        std::env::var_os("XDG_CONFIG_HOME"),
-        std::env::var_os("HOME"),
-    )
-}
-
-fn resolve_default_path(
-    xdg_config_home: Option<OsString>,
-    home: Option<OsString>,
-) -> Result<PathBuf> {
-    let config_dir = match (xdg_config_home, home) {
-        (Some(xdg), _) if !xdg.is_empty() => PathBuf::from(xdg),
-        (_, Some(home)) if !home.is_empty() => PathBuf::from(home).join(".config"),
-        _ => {
-            return Err(anyhow!(
-                "XDG_CONFIG_HOME も HOME も未設定です。--config で設定ファイルを指定してください"
-            ));
-        }
-    };
-    Ok(config_dir.join("ecsh").join("config.toml"))
+    let dir = xdg::config_dir().ok_or_else(|| {
+        anyhow!("XDG_CONFIG_HOME も HOME も未設定です。--config で設定ファイルを指定してください")
+    })?;
+    Ok(dir.join("config.toml"))
 }
 
 #[cfg(test)]
@@ -161,31 +146,5 @@ mod tests {
         "#;
 
         assert!(Config::parse(text).is_err());
-    }
-
-    #[test]
-    fn default_path_prefers_xdg_config_home() {
-        let path = resolve_default_path(Some("/xdg".into()), Some("/home/me".into())).unwrap();
-
-        assert_eq!(path, PathBuf::from("/xdg/ecsh/config.toml"));
-    }
-
-    #[test]
-    fn default_path_falls_back_to_home_when_xdg_is_unset_or_empty() {
-        let expected = PathBuf::from("/home/me/.config/ecsh/config.toml");
-
-        assert_eq!(
-            resolve_default_path(None, Some("/home/me".into())).unwrap(),
-            expected
-        );
-        assert_eq!(
-            resolve_default_path(Some("".into()), Some("/home/me".into())).unwrap(),
-            expected
-        );
-    }
-
-    #[test]
-    fn default_path_fails_without_xdg_and_home() {
-        assert!(resolve_default_path(None, None).is_err());
     }
 }

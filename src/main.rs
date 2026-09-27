@@ -8,8 +8,10 @@ mod ecs;
 mod prompt;
 mod report;
 mod session;
+mod session_lock;
 mod signals;
 mod ui;
+mod xdg;
 
 use std::process::ExitCode;
 
@@ -48,6 +50,9 @@ async fn main() -> ExitCode {
 
 async fn try_main() -> Result<()> {
     let cli = Cli::parse();
+    if let Command::Run { args } = &cli.command {
+        return commands::run(args);
+    }
     let config_path = match cli.config {
         Some(path) => path,
         None => config::default_path()?,
@@ -55,9 +60,9 @@ async fn try_main() -> Result<()> {
     let config = Config::load(&config_path)?;
 
     match cli.command {
-        Command::Run { profile, yes } => {
+        Command::Exec { profile, yes } => {
             let (name, profile) = prompt::select_profile(&config, profile.as_deref())?;
-            commands::run(name, profile, yes).await
+            commands::exec(name, profile, yes).await
         }
         Command::Ps { profile } => {
             commands::ps(prompt::select_profile(&config, profile.as_deref())?.1)
@@ -65,5 +70,6 @@ async fn try_main() -> Result<()> {
         Command::Gc { profile } => {
             commands::gc(prompt::select_profile(&config, profile.as_deref())?.1)
         }
+        Command::Run { .. } => unreachable!("設定を読む前に案内して終えている"),
     }
 }
