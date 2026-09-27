@@ -11,6 +11,7 @@ use super::run::{self, command_line, outcome};
 use crate::aws_error;
 use crate::aws_profile::AwsProfile;
 use crate::config::Config;
+use crate::console;
 use crate::ecs;
 use crate::history::{self, Entry, History};
 use crate::logs::{self, LogTail};
@@ -24,7 +25,14 @@ mod choice;
 /// 手元の run の履歴から 1 件選び、出力を見る。ecsh の終了コードを返す
 ///
 /// `last` なら直近の 1 件を選ばせずに開く。そのときプロファイルを省略したら、プロファイルを問わず直近
-pub async fn logs(config: &Config, profile: Option<&str>, last: bool) -> Result<u8> {
+///
+/// `in_browser` なら、出力を流す代わりに CloudWatch Logs のページをブラウザで開く
+pub async fn logs(
+    config: &Config,
+    profile: Option<&str>,
+    last: bool,
+    in_browser: bool,
+) -> Result<u8> {
     let profile = match (profile, last) {
         (None, true) => None,
         (profile, _) => Some(prompt::select_profile(config, profile)?.0),
@@ -38,7 +46,20 @@ pub async fn logs(config: &Config, profile: Option<&str>, last: bool) -> Result<
         }
         return Ok(0);
     };
+    if in_browser {
+        console::open_in_browser(&log_page_url(entry)?)?;
+        return Ok(0);
+    }
     open(entry).await
+}
+
+fn log_page_url(entry: &Entry) -> Result<String> {
+    match &entry.log {
+        Some(stream) => Ok(console::log_stream_url(stream)),
+        None => bail!(
+            "この run の出力は CloudWatch Logs から読めない設定だったので、ログのページを開けません"
+        ),
+    }
 }
 
 async fn open(entry: &Entry) -> Result<u8> {
@@ -316,6 +337,24 @@ mod tests {
 
         assert_eq!(stopped.exit_code, Some(3));
         assert_eq!(took, Duration::from_secs(125));
+    }
+
+    #[test]
+    fn log_page_is_the_console_page_of_the_recorded_log_stream() {
+        let recorded = entry("staging", "aaa", 0);
+
+        assert_eq!(
+            log_page_url(&recorded).unwrap(),
+            console::log_stream_url(recorded.log.as_ref().unwrap())
+        );
+    }
+
+    #[test]
+    fn log_page_cannot_be_opened_for_a_run_without_readable_logs() {
+        let mut unreadable = entry("staging", "aaa", 0);
+        unreadable.log = None;
+
+        assert!(log_page_url(&unreadable).is_err());
     }
 
     #[test]
