@@ -1,6 +1,7 @@
 mod cli;
 mod commands;
 mod config;
+mod ecs;
 
 use anyhow::Result;
 use clap::Parser;
@@ -8,7 +9,8 @@ use clap::Parser;
 use crate::cli::{Cli, Command};
 use crate::config::Config;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     let config_path = match cli.config {
         Some(path) => path,
@@ -17,7 +19,7 @@ fn main() -> Result<()> {
     let config = Config::load(&config_path)?;
 
     match cli.command {
-        Command::Run { profile } => commands::run(config.profile(&profile)?),
+        Command::Run { profile } => commands::run(config.profile(&profile)?).await,
         Command::Ps { profile } => commands::ps(config.profile(&profile)?),
         Command::Gc { profile } => commands::gc(config.profile(&profile)?),
     }
