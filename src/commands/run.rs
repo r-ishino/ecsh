@@ -1,8 +1,8 @@
 use std::env::{self, VarError};
-use std::time::Duration;
 
 use anyhow::{Result, bail};
 
+use crate::agent_wait;
 use crate::aws_profile::AwsProfile;
 use crate::config::Profile;
 use crate::ecs;
@@ -51,8 +51,13 @@ pub async fn run(name: &str, profile: &Profile, yes: bool) -> Result<()> {
 
     // ここから先の `?` は async ブロックを抜けるだけで、どのエラーでも下の stop_after がタスクを止める
     let used: Result<()> = async {
-        eprintln!("exec は未実装のため、5 秒後に止めます");
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        agent_wait::wait_until_exec_ready(
+            &client,
+            &profile.cluster,
+            &task.task_arn,
+            &profile.container,
+        )
+        .await?;
         Ok(())
     }
     .await;

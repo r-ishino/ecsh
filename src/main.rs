@@ -1,3 +1,4 @@
+mod agent_wait;
 mod aws_profile;
 mod cli;
 mod commands;
