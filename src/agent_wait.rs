@@ -8,13 +8,13 @@ use aws_sdk_ecs::types::ManagedAgentName;
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
 const TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
-/// 起動したタスクのコンテナで ExecuteCommandAgent が RUNNING になるまで待つ
+/// 起動したタスクのコンテナで ExecuteCommandAgent が RUNNING になるまで待ち、そのコンテナの runtimeId を返す
 pub async fn wait_until_exec_ready(
     client: &Client,
     cluster: &str,
     task_arn: &str,
     container: &str,
-) -> Result<()> {
+) -> Result<String> {
     eprintln!("ExecuteCommandAgent の起動を待っています（上限 5 分）");
     let started = Instant::now();
     let mut previous: Option<Observation> = None;
@@ -30,7 +30,11 @@ pub async fn wait_until_exec_ready(
         match next_step(&observation, elapsed)? {
             Progress::Ready => {
                 eprintln!("ExecuteCommandAgent が RUNNING になりました");
-                return Ok(());
+                return observation.runtime_id.with_context(|| {
+                    format!(
+                        "DescribeTasks の応答にコンテナ `{container}` の runtimeId がありません"
+                    )
+                });
             }
             Progress::Waiting => {}
         }
@@ -61,6 +65,8 @@ struct Observation {
     task_status: String,
     desired_status: String,
     stopped_reason: Option<String>,
+    /// 対象コンテナの runtimeId。session-manager-plugin に渡す接続先に要る
+    runtime_id: Option<String>,
     /// 対象コンテナの managedAgents にまだ現れていなければ None
     agent: Option<Agent>,
 }
@@ -112,6 +118,7 @@ fn observation_from(output: DescribeTasksOutput, container: &str) -> Result<Obse
         task_status: task.last_status().unwrap_or("-").to_owned(),
         desired_status: task.desired_status().unwrap_or("-").to_owned(),
         stopped_reason: task.stopped_reason().map(str::to_owned),
+        runtime_id: target.runtime_id().map(str::to_owned),
         agent,
     })
 }
@@ -172,6 +179,7 @@ mod tests {
             task_status: task_status.into(),
             desired_status: "RUNNING".into(),
             stopped_reason: None,
+            runtime_id: None,
             agent: agent_status.map(|status| Agent {
                 status: status.into(),
                 reason: None,
@@ -191,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    fn exec_agent_of_target_container_is_observed() {
+    fn exec_agent_and_runtime_id_of_target_container_are_observed() {
         let task = Task::builder()
             .last_status("RUNNING")
             .desired_status("RUNNING")
@@ -204,6 +212,7 @@ mod tests {
             .containers(
                 Container::builder()
                     .name("app")
+                    .runtime_id("abc-123")
                     .managed_agents(exec_agent("RUNNING"))
                     .build(),
             )
@@ -211,7 +220,13 @@ mod tests {
 
         let observed = observation_from(output_with(task), "app").unwrap();
 
-        assert_eq!(observed, observation("RUNNING", Some("RUNNING")));
+        assert_eq!(
+            observed,
+            Observation {
+                runtime_id: Some("abc-123".into()),
+                ..observation("RUNNING", Some("RUNNING"))
+            }
+        );
     }
 
     #[test]
@@ -275,6 +290,7 @@ mod tests {
             task_status: "DEACTIVATING".into(),
             desired_status: "STOPPED".into(),
             stopped_reason: Some("Essential container in task exited".into()),
+            runtime_id: None,
             agent: None,
         };
 

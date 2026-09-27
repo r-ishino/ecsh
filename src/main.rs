@@ -5,6 +5,7 @@ mod commands;
 mod config;
 mod ecs;
 mod prompt;
+mod session;
 
 use std::process::ExitCode;
 

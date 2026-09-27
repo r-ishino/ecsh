@@ -2,7 +2,7 @@
 
 A CLI that launches a one-off task on Amazon ECS, drops you into it with ECS Exec, and stops the task when you exit.
 
-> **Work in progress**: `run` does not drop you into the task yet. It launches the one-off task, waits until the ExecuteCommandAgent is RUNNING, and then stops the task.
+> **Work in progress**: signals are not handled yet. If ecsh is interrupted before you get in (Ctrl-C while waiting) or the terminal is closed, the task is not stopped right away; it stops on its own 12 hours after it starts.
 
 ## Why
 
@@ -22,7 +22,7 @@ ecsh combines these into a single command:
 
 - Rust (to build)
 - AWS credentials (resolved the same way as the standard AWS SDK)
-- [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
+- [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) on `PATH` (`run` checks for it before launching anything)
 - ECS Exec enabled on the target ECS service
 
 ## Installation
@@ -60,6 +60,8 @@ ecsh run staging   # launch a one-off task and get in; stop it when you exit
 ecsh ps staging    # list the tasks launched by ecsh that are still running
 ecsh gc staging    # stop leftover ecsh tasks
 ```
+
+`run` starts `/bin/sh` in the container, with the profile name in the prompt (`[staging] /app # `). When you exit the shell, ecsh stops the task. Even if the session ends abnormally (for example, the connection drops), ecsh still stops the task and exits with 0 as long as stopping succeeds; it only prints the session's exit status.
 
 If you omit the profile name, the profiles in the config are shown as a list. Pick one with ↑↓ and Enter (Esc to cancel). The list cannot be shown when stdin is not a terminal, so pass the name in that case.
 

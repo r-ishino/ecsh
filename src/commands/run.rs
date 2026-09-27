@@ -7,10 +7,13 @@ use crate::aws_profile::AwsProfile;
 use crate::config::Profile;
 use crate::ecs;
 use crate::prompt;
+use crate::session::{self, Target};
 
 mod stop;
 
 pub async fn run(name: &str, profile: &Profile, yes: bool) -> Result<()> {
+    let plugin = session::find_plugin()?;
+    let shell_command = session::shell_command(name);
     eprintln!(
         "対象: region={} cluster={} service={} container={}",
         profile.region, profile.cluster, profile.service, profile.container
@@ -51,13 +54,32 @@ pub async fn run(name: &str, profile: &Profile, yes: bool) -> Result<()> {
 
     // ここから先の `?` は async ブロックを抜けるだけで、どのエラーでも下の stop_after がタスクを止める
     let used: Result<()> = async {
-        agent_wait::wait_until_exec_ready(
+        let runtime_id = agent_wait::wait_until_exec_ready(
             &client,
             &profile.cluster,
             &task.task_arn,
             &profile.container,
         )
         .await?;
+        let target = Target {
+            region: &profile.region,
+            cluster: &profile.cluster,
+            task_arn: &task.task_arn,
+            container: &profile.container,
+            runtime_id: &runtime_id,
+        };
+        let mut child = session::start(
+            &client,
+            &plugin,
+            &target,
+            &shell_command,
+            aws_profile.name(),
+        )
+        .await?;
+        let status = session::wait(&mut child).await?;
+        if let Some(message) = session::abnormal_exit_message(status) {
+            eprintln!("{message}");
+        }
         Ok(())
     }
     .await;
