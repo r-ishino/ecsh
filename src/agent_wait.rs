@@ -17,7 +17,7 @@ pub async fn wait_until_exec_ready(
     task_arn: &str,
     container: &str,
 ) -> Result<String> {
-    let mut waiting = Waiting::start("入れるようになるのを待っています", "上限 5 分");
+    let mut waiting = Waiting::start("入れるようになるのを待っています", Some("上限 5 分"));
     loop {
         let observation = describe(client, cluster, task_arn, container).await?;
         waiting.update(status_text(&observation));

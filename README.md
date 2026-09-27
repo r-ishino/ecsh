@@ -1,6 +1,6 @@
 # ecsh
 
-A CLI that launches a one-off task on Amazon ECS, drops you into it with ECS Exec, and stops the task when you exit.
+A CLI that launches a one-off task on Amazon ECS, drops you into it with ECS Exec, and stops the task when you exit. It can also run a command as a one-off task and stream its output.
 
 ## Why
 
@@ -22,6 +22,7 @@ ecsh combines these into a single command:
 - AWS credentials (resolved the same way as the standard AWS SDK)
 - [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) on `PATH` (`exec` checks for it before launching anything)
 - ECS Exec enabled on the target ECS service
+- For `run`: the [new ARN and resource ID format](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-account-settings.html#ecs-resource-ids) for tasks enabled in the account (needed to tag a task at launch), and permission for `ecs:TagResource`, `ecs:DescribeTaskDefinition`, and `logs:GetLogEvents`
 
 ## Installation
 
@@ -54,6 +55,7 @@ The AWS profile is chosen in the following order. `exec` prints the profile it u
 
 ```sh
 ecsh exec staging  # launch a one-off task and get in; stop it when you exit
+ecsh run staging -- bundle exec rake db:migrate:status  # run a command as a one-off task and stream its output
 ecsh ps staging    # list the tasks launched by ecsh that are still running
 ecsh ps --all      # the same, across every profile in the config
 ecsh gc staging    # choose leftover ecsh tasks and stop them
@@ -126,7 +128,38 @@ ID        接続      状態     起動から     タスク定義  自動停止�
 
 All of `gc`'s output goes to stderr.
 
-`ecsh run` no longer gets you into a task; it launches nothing and points you to `ecsh exec`. It is reserved for a future subcommand that runs a command as the task's command.
+### run
+
+`ecsh run [profile] -- <command...>` launches a one-off task whose container command is the command after `--`. The arguments are passed as they are, without a shell, so the command becomes the container's main process and receives the SIGTERM that StopTask sends. The task stops by itself when the command ends; there is no time limit. The network configuration and the other launch settings are copied from the service, the same as `exec`.
+
+```sh
+ecsh run staging -- bundle exec rake db:migrate:status
+ecsh run staging -- bundle exec rake 'users:import[2026-09-01,dry]'  # quote [ ] (zsh expands them)
+ecsh run staging -- bundle exec rake users:import LIMIT=10            # rake takes KEY=VALUE as environment variables
+ecsh run staging -- env LIMIT=10 bin/import                           # otherwise, use env
+ecsh run staging -- sh -c 'bin/prepare && bundle exec rake users:import'
+ecsh run -d staging -- bundle exec rake users:import                  # launch it and leave
+```
+
+When you need `&&`, pipes, or other shell syntax, wrap the command in `sh -c` yourself. In that case the shell is the main process and does not pass SIGTERM on to the command, so stopping the task kills the command without letting it clean up (after the stop timeout).
+
+`run` asks y/N before launching, the same as `exec` (`--yes` / `-y` skips it). Running `ecsh run staging` without a command launches nothing and points you to `ecsh exec staging`.
+
+By default, `run` waits for the command to finish:
+
+- The command's output goes to stdout, read from CloudWatch Logs. ecsh finds the log group and stream from the container's `awslogs` log configuration in the task definition (`awslogs-group` and `awslogs-stream-prefix` are needed). Progress and results go to stderr
+- When the task stops, ecsh prints the rest of the output and exits with the command's exit code, along with the time taken. If the command has no exit code (for example, the task failed to start), ecsh prints why the task stopped and exits with 1
+- If the container does not use `awslogs`, ecsh prints a warning and only waits for the task to stop
+
+`--detach` (`-d`) launches the task and exits with 0, printing the task ID and where to read the output (the CloudWatch Logs log group and stream in the AWS console).
+
+Signals while `run` is waiting:
+
+- Ctrl-C stops the output and asks whether to stop the task. `y` stops the task, waits until it has stopped, and exits with 130. `N` or Enter leaves the task running to the end and exits with 130
+- Ctrl-C again while it is asking leaves the task running. Ctrl-C while ecsh is waiting for the task to stop exits without waiting
+- Closing the terminal (SIGHUP), SIGTERM, and Ctrl-C when stdin is not a terminal leave the task running and exit with 128 + the signal number
+
+A task launched by `run` has `startedBy = ecsh/$USER` like `exec`, and the tag `ecsh:mode = run`. `ps` shows it as run, and `gc` lists it unchecked, so a runaway command can be stopped by checking it there.
 
 ## Development
 

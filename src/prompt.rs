@@ -1,7 +1,7 @@
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use inquire::{InquireError, MultiSelect, Select};
 
 use crate::config::{Config, Profile};
@@ -177,7 +177,25 @@ fn confirm_launch_with(
     }
 }
 
-fn is_yes(answer: &str) -> bool {
+/// question を出して 1 行読む。読んでいる間も、呼び出し側はシグナルを待てる
+///
+/// tokio の spawn_blocking で読まないのは、答えを待たずに終了するとき、ランタイムの終了が stdin の読み込みを待ち続けて終われなくなるから
+pub async fn read_line_concurrently(question: &str) -> Result<String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let question = question.to_owned();
+    std::thread::spawn(move || {
+        let _ = sender.send(Terminal.read_line(&question));
+    });
+    receiver
+        .await
+        .context("標準入力を読むスレッドが答えを返さずに終わりました")?
+}
+
+pub fn stdin_is_terminal() -> bool {
+    Terminal.stdin_is_terminal()
+}
+
+pub fn is_yes(answer: &str) -> bool {
     matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 

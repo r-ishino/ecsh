@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-/// ECS の使い捨てタスクを起動して入り、抜けたら止める
+/// ECS の使い捨てタスクを起動して入り、抜けたら止める。コマンドを流すこともできる
 #[derive(Debug, Parser)]
 #[command(version, about)]
 pub struct Cli {
@@ -47,12 +47,22 @@ pub enum Command {
         #[arg(short, long)]
         yes: bool,
     },
-    /// 旧名の `run` で入ろうとした手を止め、`exec` を案内する。コマンドを流す `run` を作るまでの仮置き
-    #[command(hide = true)]
+    /// コマンドを使い捨てタスクのコマンドとして流す。既定では終わるまで出力を流し、コマンドの終了コードで終わる
     Run {
-        /// 旧 `run` の引数。何が付いていても解釈せず、案内に使うだけ
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// 設定ファイルの [profiles.<名前>]。省略すると一覧から選ぶ
+        profile: Option<String>,
+
+        /// 起動前の y/N の確認を省く
+        #[arg(short, long)]
+        yes: bool,
+
+        /// 起動だけして抜ける。タスクは最後まで動く
+        #[arg(short, long)]
+        detach: bool,
+
+        /// `--` の後ろに、流すコマンド。シェルを通さず、そのままコンテナのコマンドにする
+        #[arg(last = true, value_name = "COMMAND")]
+        command: Vec<String>,
     },
 }
 
@@ -144,30 +154,75 @@ mod tests {
         assert!(Cli::try_parse_from(["ecsh", "ps", "staging", "--all"]).is_err());
     }
 
-    #[test]
-    fn run_accepts_any_arguments_of_the_former_run() {
-        let parse_args = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command {
-            Command::Run { args } => args,
+    fn parse_run(args: &[&str]) -> (Option<String>, bool, bool, Vec<String>) {
+        match Cli::try_parse_from(args).unwrap().command {
+            Command::Run {
+                profile,
+                yes,
+                detach,
+                command,
+            } => (profile, yes, detach, command),
             command => panic!("run として解釈されない: {command:?}"),
-        };
+        }
+    }
 
-        assert_eq!(parse_args(&["ecsh", "run"]), Vec::<String>::new());
-        assert_eq!(parse_args(&["ecsh", "run", "staging"]), ["staging"]);
+    #[test]
+    fn run_takes_everything_after_double_dash_as_the_command_verbatim() {
+        let (profile, yes, detach, command) = parse_run(&[
+            "ecsh",
+            "run",
+            "staging",
+            "--",
+            "bundle",
+            "exec",
+            "rake",
+            "-y",
+            "--detach",
+            "task[a, b]",
+        ]);
+
+        assert_eq!(profile.as_deref(), Some("staging"));
+        assert!(!yes);
+        assert!(!detach);
         assert_eq!(
-            parse_args(&["ecsh", "run", "-y", "staging"]),
-            ["-y", "staging"]
-        );
-        assert_eq!(
-            parse_args(&["ecsh", "run", "staging", "--", "rake", "db:migrate"]),
-            ["staging", "--", "rake", "db:migrate"]
+            command,
+            ["bundle", "exec", "rake", "-y", "--detach", "task[a, b]"]
         );
     }
 
     #[test]
-    fn run_is_hidden_from_help() {
-        let help = Cli::command().render_help().to_string();
+    fn run_accepts_yes_and_detach_before_double_dash() {
+        let (_, yes, detach, _) = parse_run(&["ecsh", "run", "-y", "-d", "staging", "--", "true"]);
+        assert!(yes && detach);
 
-        assert!(help.contains("exec"), "{help}");
-        assert!(!help.contains("run"), "{help}");
+        let (_, yes, detach, _) =
+            parse_run(&["ecsh", "run", "staging", "--yes", "--detach", "--", "true"]);
+        assert!(yes && detach);
+    }
+
+    #[test]
+    fn run_profile_can_be_omitted_before_double_dash() {
+        let (profile, _, _, command) =
+            parse_run(&["ecsh", "run", "--", "rake", "db:migrate:status"]);
+
+        assert_eq!(profile, None);
+        assert_eq!(command, ["rake", "db:migrate:status"]);
+    }
+
+    #[test]
+    fn run_without_a_command_is_parsed_so_that_it_can_point_to_exec() {
+        assert_eq!(
+            parse_run(&["ecsh", "run", "staging"]).3,
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            parse_run(&["ecsh", "run", "staging", "--"]).3,
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn run_command_without_double_dash_is_rejected() {
+        assert!(Cli::try_parse_from(["ecsh", "run", "staging", "rake"]).is_err());
     }
 }

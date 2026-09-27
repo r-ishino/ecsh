@@ -38,17 +38,23 @@ impl fmt::Display for Signal {
     }
 }
 
-/// タスクを起動した後、シグナルを受けた時点で exec が何をしているか
+/// タスクを起動した後、シグナルを受けた時点で exec / run が何をしているか
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
-    /// RunTask から、Agent を待ってセッションを始めるまで
+    /// exec: RunTask から、Agent を待ってセッションを始めるまで
     Preparing,
-    /// session-manager-plugin が動いている間
+    /// exec: session-manager-plugin が動いている間
     InSession,
-    /// 抜けた後や、エラーの後始末の StopTask
+    /// exec: 抜けた後や、エラーの後始末の StopTask
     Stopping,
-    /// シグナルを受けて StopTask している間
+    /// exec / run: シグナルを受けて StopTask している間
     StoppingOnSignal,
+    /// run: RunTask から、コマンドが終わるのを待っている間
+    Following,
+    /// run: タスクを止めるかを聞いている間
+    AskingToStop,
+    /// run: 止める指示を送った後、タスクが止まるのを待っている間
+    AwaitingStopped,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +65,10 @@ pub enum Action {
     StopTask,
     /// タスクを止めるのを待たずに終了する
     ExitNow,
+    /// タスクを止めるかを聞く
+    AskToStop,
+    /// タスクを止めずに終了する。タスクは最後まで動く
+    Leave,
 }
 
 pub fn action(stage: Stage, signal: Signal) -> Action {
@@ -69,10 +79,14 @@ pub fn action(stage: Stage, signal: Signal) -> Action {
         (Stage::StoppingOnSignal, Signal::Interrupt) => Action::ExitNow,
         (Stage::StoppingOnSignal, Signal::Hangup | Signal::Terminate) => Action::Ignore,
         (Stage::Stopping, _) => Action::Ignore,
+        (Stage::Following, Signal::Interrupt) => Action::AskToStop,
+        (Stage::Following, Signal::Hangup | Signal::Terminate) => Action::Leave,
+        (Stage::AskingToStop, _) => Action::Leave,
+        (Stage::AwaitingStopped, _) => Action::ExitNow,
     }
 }
 
-/// 受け流さなかったシグナル。action は StopTask か ExitNow
+/// 受け流さなかったシグナル。action は Ignore 以外
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Interruption {
     pub signal: Signal,
@@ -195,6 +209,43 @@ mod tests {
             assert_eq!(
                 action(Stage::StoppingOnSignal, signal),
                 Action::Ignore,
+                "{signal}"
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_c_while_following_a_run_asks_whether_to_stop_the_task() {
+        assert_eq!(
+            action(Stage::Following, Signal::Interrupt),
+            Action::AskToStop
+        );
+    }
+
+    #[test]
+    fn closing_the_tab_or_sigterm_while_following_a_run_leaves_the_task_running() {
+        for signal in [Signal::Hangup, Signal::Terminate] {
+            assert_eq!(action(Stage::Following, signal), Action::Leave, "{signal}");
+        }
+    }
+
+    #[test]
+    fn any_signal_while_asking_to_stop_a_run_leaves_the_task_running() {
+        for signal in ALL {
+            assert_eq!(
+                action(Stage::AskingToStop, signal),
+                Action::Leave,
+                "{signal}"
+            );
+        }
+    }
+
+    #[test]
+    fn any_signal_after_the_run_was_told_to_stop_exits_without_waiting_for_it() {
+        for signal in ALL {
+            assert_eq!(
+                action(Stage::AwaitingStopped, signal),
+                Action::ExitNow,
                 "{signal}"
             );
         }

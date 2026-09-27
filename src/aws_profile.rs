@@ -2,6 +2,7 @@ use std::env::{self, VarError};
 use std::fmt;
 
 use anyhow::{Result, bail};
+use aws_config::{BehaviorVersion, Region, SdkConfig};
 
 /// AWS のクレデンシャルを解決するプロファイルと、それをどこから取ったか
 #[derive(Debug, PartialEq, Eq)]
@@ -37,6 +38,16 @@ impl AwsProfile {
             Self::Env(name) | Self::Config(name) => Some(name),
             Self::Default => None,
         }
+    }
+
+    /// このプロファイルのクレデンシャルで region の AWS を呼ぶ設定。ECS と CloudWatch Logs のクライアントで共用する
+    pub async fn sdk_config(&self, region: &str) -> SdkConfig {
+        let mut loader =
+            aws_config::defaults(BehaviorVersion::latest()).region(Region::new(region.to_owned()));
+        if let Some(name) = self.name() {
+            loader = loader.profile_name(name);
+        }
+        loader.load().await
     }
 }
 
