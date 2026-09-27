@@ -5,11 +5,12 @@ use std::fmt;
 use anyhow::{Context, Result};
 use aws_sdk_cloudwatchlogs::Client;
 use aws_sdk_ecs::types::{LogConfiguration, LogDriver};
+use serde::{Deserialize, Serialize};
 
 use crate::aws_profile::AwsProfile;
 
 /// awslogs ドライバがコンテナの出力を書くログストリーム
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogStream {
     pub region: String,
     pub group: String,

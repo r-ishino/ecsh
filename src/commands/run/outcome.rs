@@ -59,17 +59,26 @@ pub fn stopped_on_request_line(style: Style, task_arn: &str, stopped: &Stopped) 
 }
 
 /// 手元が抜けた後に、タスクをどこで追えるか。`-d` と、止めずに抜けたときに出す
+///
+/// `recorded` は run の履歴に書けたか。書けていなければ logs の一覧に出ないので、AWS コンソールを案内する
 pub fn whereabouts_lines(
     style: Style,
     profile_name: &str,
     task_arn: &str,
     destination: &LogDestination,
+    recorded: bool,
 ) -> Vec<String> {
-    let output = match destination {
-        LogDestination::Awslogs(stream) => {
+    let output = match (recorded, destination) {
+        (true, LogDestination::Awslogs(_)) => {
+            format!("出力は `ecsh logs {profile_name}` の一覧から選んで見られます")
+        }
+        (true, LogDestination::Unreadable(_)) => {
+            format!("結果は `ecsh logs {profile_name}` の一覧から選んで確かめられます")
+        }
+        (false, LogDestination::Awslogs(stream)) => {
             format!("出力は AWS コンソールの CloudWatch Logs で見られます  {stream}")
         }
-        LogDestination::Unreadable(_) => {
+        (false, LogDestination::Unreadable(_)) => {
             "出力は AWS コンソールの ECS のタスクの詳細から確かめてください".to_owned()
         }
     };
@@ -197,27 +206,47 @@ mod tests {
                 PLAIN,
                 "staging",
                 TASK_ARN,
-                &LogDestination::Awslogs(stream())
+                &LogDestination::Awslogs(stream()),
+                true
             ),
             [
                 "  タスク ID  0123456789abcdef",
-                "  出力は AWS コンソールの CloudWatch Logs で見られます  /ecs/worker / ecs/app/0123456789abcdef",
+                "  出力は `ecsh logs staging` の一覧から選んで見られます",
                 "  止めるなら `ecsh gc staging` の一覧で選んでください",
             ]
         );
     }
 
     #[test]
-    fn whereabouts_without_awslogs_point_to_the_task_details() {
+    fn whereabouts_without_awslogs_point_to_logs_for_the_result() {
         let lines = whereabouts_lines(
             PLAIN,
             "staging",
             TASK_ARN,
             &LogDestination::Unreadable("コンテナにログ設定が無い".into()),
+            true,
         );
 
         assert_eq!(
             lines[1],
+            "  結果は `ecsh logs staging` の一覧から選んで確かめられます"
+        );
+    }
+
+    #[test]
+    fn whereabouts_point_to_the_aws_console_when_the_run_is_missing_from_the_history() {
+        let console = |destination| {
+            whereabouts_lines(PLAIN, "staging", TASK_ARN, &destination, false)[1].clone()
+        };
+
+        assert_eq!(
+            console(LogDestination::Awslogs(stream())),
+            "  出力は AWS コンソールの CloudWatch Logs で見られます  /ecs/worker / ecs/app/0123456789abcdef"
+        );
+        assert_eq!(
+            console(LogDestination::Unreadable(
+                "コンテナにログ設定が無い".into()
+            )),
             "  出力は AWS コンソールの ECS のタスクの詳細から確かめてください"
         );
     }

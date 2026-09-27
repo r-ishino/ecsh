@@ -60,6 +60,8 @@ ecsh ps staging    # list the tasks launched by ecsh that are still running
 ecsh ps --all      # the same, across every profile in the config
 ecsh gc staging    # choose leftover ecsh tasks and stop them
 ecsh gc --all      # the same, across every profile in the config
+ecsh logs          # choose a profile, then one of your past runs, and show its output
+ecsh logs --last   # show the output of your latest run, whatever the profile
 ```
 
 `exec` starts `/bin/sh` in the container, with the profile name in the prompt (`[staging] /app # `). When you exit the shell, ecsh stops the task. Even if the session ends abnormally (for example, the connection drops), ecsh still stops the task and exits with 0 as long as stopping succeeds; it only prints the session's exit status.
@@ -151,7 +153,7 @@ By default, `run` waits for the command to finish:
 - When the task stops, ecsh prints the rest of the output and exits with the command's exit code, along with the time taken. If the command has no exit code (for example, the task failed to start), ecsh prints why the task stopped and exits with 1
 - If the container does not use `awslogs`, ecsh prints a warning and only waits for the task to stop
 
-`--detach` (`-d`) launches the task and exits with 0, printing the task ID and where to read the output (the CloudWatch Logs log group and stream in the AWS console).
+`--detach` (`-d`) launches the task and exits with 0, printing the task ID and pointing you to `ecsh logs` to read the output later.
 
 Signals while `run` is waiting:
 
@@ -159,7 +161,29 @@ Signals while `run` is waiting:
 - Ctrl-C again while it is asking leaves the task running. Ctrl-C while ecsh is waiting for the task to stop exits without waiting
 - Closing the terminal (SIGHUP), SIGTERM, and Ctrl-C when stdin is not a terminal leave the task running and exit with 128 + the signal number
 
+Each `run` is recorded in the history that `ecsh logs` reads (see below). If the history cannot be written, `run` prints a warning and carries on; `-d` and leaving without stopping then point you to the AWS console instead of `ecsh logs`.
+
 A task launched by `run` has `startedBy = ecsh/$USER` like `exec`, and the tag `ecsh:mode = run`. `ps` shows it as run, and `gc` lists it unchecked, so a runaway command can be stopped by checking it there.
+
+### logs
+
+`ecsh logs` shows the output of a command you ran with `run` on this machine.
+
+```sh
+ecsh logs         # choose a profile, then a run from its history
+ecsh logs --last  # open the latest run right away, whatever the profile
+```
+
+Without a profile name, `logs` first asks for a profile, the same as the other commands, then lists that profile's runs, newest first, with the launch time, the result (終了 <exit code>, or 未確認 when ecsh has not seen the task stop), the time taken, and the command. Pick one with ↑↓ and Enter (Esc cancels with exit status 1). Passing the name (`ecsh logs staging`) skips the profile list; `ecsh logs staging --last` opens the latest run of that profile. The list cannot be shown when stdin is not a terminal; use `--last` in that case. With no runs to show, `logs` says so and exits with 0.
+
+- A run that has finished: its whole output goes to stdout, followed by its exit code and time taken on stderr
+- A run that is still going: the output is streamed the same way as when `run` waits, and the exit code is shown when the task stops. Ctrl-C (or closing the terminal, or SIGTERM) only stops watching; the task keeps running, and `logs` exits with 128 + the signal number
+- A run launched with `-d` or left without stopping has no exit code in the history yet. `logs` asks ECS (DescribeTasks) and records the result when the task has stopped. ECS forgets stopped tasks after a while; the exit code is then shown as unknown
+- If the log stream no longer exists (for example, the log group's retention period has passed), `logs` says the output is gone
+
+`logs` exits with 0 once it has shown the run, whatever the command's exit code.
+
+The history lives in `history.jsonl` under the state directory (the same directory as `sessions/`). `run` adds a line each time it launches a task and records the exit code and time taken once it sees the task stop. Only the latest 100 runs are kept. `exec` is not recorded, since its task only runs `sleep`. Only runs launched from this machine are listed.
 
 ## Development
 
