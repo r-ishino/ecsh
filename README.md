@@ -42,7 +42,6 @@ cluster = "example-staging"
 service = "worker"   # service to copy the network configuration from
 container = "app"    # container to exec into
 aws_profile = "example"  # optional
-confirm = true           # optional; if true, ask y/N before launching
 ```
 
 The AWS profile is chosen in the following order. `run` prints the profile it used and where it came from.
@@ -71,7 +70,7 @@ Before the task is launched, Ctrl-C simply exits.
 
 If you omit the profile name, the profiles in the config are shown as a list. Pick one with ↑↓ and Enter (Esc to cancel). The list cannot be shown when stdin is not a terminal, so pass the name in that case.
 
-For a profile with `confirm = true`, `run` asks y/N before launching the task. Anything other than `y` or `yes` cancels the launch. `--yes` (`-y`) skips the prompt. When stdin is not a terminal and `--yes` is not given, it fails with an error instead of launching.
+`run` always asks y/N before launching the task, for every profile. Anything other than `y` or `yes` cancels the launch. `--yes` (`-y`) skips the prompt. When stdin is not a terminal and `--yes` is not given, it fails with an error instead of launching.
 
 ## Development
 

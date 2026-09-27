@@ -23,9 +23,6 @@ pub struct Profile {
     pub container: String,
     /// 環境変数 AWS_PROFILE が無いときに使う AWS プロファイル
     pub aws_profile: Option<String>,
-    /// タスクを起動する前に y/N を聞く
-    #[serde(default)]
-    pub confirm: bool,
 }
 
 impl Config {
@@ -102,31 +99,25 @@ mod tests {
                 service: "worker".into(),
                 container: "app".into(),
                 aws_profile: Some("example".into()),
-                confirm: false,
             }
         );
-        let production = config.profile("production").unwrap();
-        assert_eq!(production.aws_profile, None);
-        assert!(production.confirm);
+        assert_eq!(config.profile("production").unwrap().aws_profile, None);
     }
 
     #[test]
-    fn confirm_defaults_to_false() {
+    fn removed_confirm_field_is_rejected_as_unknown() {
         let text = r#"
-            [profiles.staging]
+            [profiles.production]
             region = "us-east-1"
-            cluster = "example-staging"
+            cluster = "example-production"
             service = "worker"
             container = "app"
+            confirm = true
         "#;
 
-        assert!(
-            !Config::parse(text)
-                .unwrap()
-                .profile("staging")
-                .unwrap()
-                .confirm
-        );
+        let message = format!("{:#}", Config::parse(text).unwrap_err());
+
+        assert!(message.contains("unknown field `confirm`"), "{message}");
     }
 
     #[test]
