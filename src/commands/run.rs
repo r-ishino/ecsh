@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 
+use crate::aws_profile::AwsProfile;
 use crate::config::Profile;
 use crate::ecs;
 
@@ -9,7 +10,10 @@ pub async fn run(profile: &Profile) -> Result<()> {
         profile.region, profile.cluster, profile.service, profile.container
     );
 
-    let client = ecs::client(&profile.region).await;
+    let aws_profile = AwsProfile::resolve(profile.aws_profile.as_deref())?;
+    eprintln!("AWS プロファイル: {aws_profile}");
+
+    let client = ecs::client(&profile.region, &aws_profile).await;
     let snapshot = ecs::describe_service(&client, &profile.cluster, &profile.service).await?;
     let network = &snapshot.network;
     eprintln!("タスク定義: {}", snapshot.task_definition);

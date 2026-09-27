@@ -9,6 +9,9 @@ cluster = "example-staging"
 service = "worker"
 # exec で入るコンテナ
 container = "app"
+# 省略可。環境変数 AWS_PROFILE が付いていればそちらが優先され、
+# どちらも無ければ AWS SDK の既定の解決順に任せる
+aws_profile = "example"
 
 [profiles.production]
 region = "us-east-1"

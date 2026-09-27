@@ -21,6 +21,8 @@ pub struct Profile {
     pub service: String,
     /// exec で入るコンテナ
     pub container: String,
+    /// 環境変数 AWS_PROFILE が無いときに使う AWS プロファイル
+    pub aws_profile: Option<String>,
 }
 
 impl Config {
@@ -86,9 +88,10 @@ mod tests {
                 cluster: "example-staging".into(),
                 service: "worker".into(),
                 container: "app".into(),
+                aws_profile: Some("example".into()),
             }
         );
-        assert!(config.profile("production").is_ok());
+        assert_eq!(config.profile("production").unwrap().aws_profile, None);
     }
 
     #[test]

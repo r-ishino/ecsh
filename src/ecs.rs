@@ -4,12 +4,15 @@ use aws_sdk_ecs::Client;
 use aws_sdk_ecs::operation::describe_services::DescribeServicesOutput;
 use aws_sdk_ecs::types::AwsVpcConfiguration;
 
-pub async fn client(region: &str) -> Client {
-    let sdk_config = aws_config::defaults(BehaviorVersion::latest())
-        .region(Region::new(region.to_owned()))
-        .load()
-        .await;
-    Client::new(&sdk_config)
+use crate::aws_profile::AwsProfile;
+
+pub async fn client(region: &str, aws_profile: &AwsProfile) -> Client {
+    let mut loader =
+        aws_config::defaults(BehaviorVersion::latest()).region(Region::new(region.to_owned()));
+    if let Some(name) = aws_profile.name() {
+        loader = loader.profile_name(name);
+    }
+    Client::new(&loader.load().await)
 }
 
 /// 使い捨てタスクを起動するときにサービスから写す設定
