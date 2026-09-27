@@ -38,7 +38,7 @@ impl fmt::Display for Signal {
     }
 }
 
-/// タスクを起動した後、シグナルを受けた時点で run が何をしているか
+/// タスクを起動した後、シグナルを受けた時点で exec が何をしているか
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
     /// RunTask から、Agent を待ってセッションを始めるまで

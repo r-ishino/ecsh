@@ -20,7 +20,7 @@ ecsh combines these into a single command:
 
 - Rust (to build)
 - AWS credentials (resolved the same way as the standard AWS SDK)
-- [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) on `PATH` (`run` checks for it before launching anything)
+- [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) on `PATH` (`exec` checks for it before launching anything)
 - ECS Exec enabled on the target ECS service
 
 ## Installation
@@ -44,7 +44,7 @@ container = "app"    # container to exec into
 aws_profile = "example"  # optional
 ```
 
-The AWS profile is chosen in the following order. `run` prints the profile it used and where it came from.
+The AWS profile is chosen in the following order. `exec` prints the profile it used and where it came from.
 
 1. The `AWS_PROFILE` environment variable
 2. `aws_profile` in the config
@@ -53,14 +53,14 @@ The AWS profile is chosen in the following order. `run` prints the profile it us
 ## Usage
 
 ```sh
-ecsh run staging   # launch a one-off task and get in; stop it when you exit
+ecsh exec staging  # launch a one-off task and get in; stop it when you exit
 ecsh ps staging    # list the tasks launched by ecsh that are still running
 ecsh gc staging    # stop leftover ecsh tasks
 ```
 
-`run` starts `/bin/sh` in the container, with the profile name in the prompt (`[staging] /app # `). When you exit the shell, ecsh stops the task. Even if the session ends abnormally (for example, the connection drops), ecsh still stops the task and exits with 0 as long as stopping succeeds; it only prints the session's exit status.
+`exec` starts `/bin/sh` in the container, with the profile name in the prompt (`[staging] /app # `). When you exit the shell, ecsh stops the task. Even if the session ends abnormally (for example, the connection drops), ecsh still stops the task and exits with 0 as long as stopping succeeds; it only prints the session's exit status.
 
-`run` prints its progress to stderr (in Japanese). It looks roughly like this:
+`exec` prints its progress to stderr (in Japanese). It looks roughly like this:
 
 ```
   staging  →  example-staging / worker / app
@@ -90,7 +90,11 @@ Before the task is launched, Ctrl-C simply exits.
 
 If you omit the profile name, the profiles in the config are shown as a list. Pick one with ↑↓ and Enter (Esc to cancel). The list cannot be shown when stdin is not a terminal, so pass the name in that case.
 
-`run` always asks y/N before launching the task, for every profile. Anything other than `y` or `yes` cancels the launch. `--yes` (`-y`) skips the prompt. When stdin is not a terminal and `--yes` is not given, it fails with an error instead of launching.
+`exec` always asks y/N before launching the task, for every profile. Anything other than `y` or `yes` cancels the launch. `--yes` (`-y`) skips the prompt. When stdin is not a terminal and `--yes` is not given, it fails with an error instead of launching.
+
+While `exec` is in a task, it holds an exclusive lock on `sessions/<task ID>.lock` under the state directory (`$XDG_STATE_HOME/ecsh`, or `~/.local/state/ecsh` when `XDG_STATE_HOME` is unset), and removes the file when it exits. This marks the task as in use from this machine. If the file cannot be created, `exec` prints a warning and carries on.
+
+`ecsh run` no longer gets you into a task; it launches nothing and points you to `ecsh exec`. It is reserved for a future subcommand that runs a command as the task's command.
 
 ## Development
 

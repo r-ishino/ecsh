@@ -1,4 +1,4 @@
-//! run の出力の見た目。色と記号を付け、状態の更新をスピナー 1 行にまとめる
+//! exec の出力の見た目。色と記号を付け、状態の更新をスピナー 1 行にまとめる
 
 use std::env;
 use std::ffi::OsStr;
@@ -279,9 +279,14 @@ pub fn duration(elapsed: Duration) -> String {
     }
 }
 
+/// `arn:aws:ecs:<region>:<account>:task/<cluster>/<ID>` → `<ID>`
+pub fn task_id(task_arn: &str) -> &str {
+    task_arn.rsplit('/').next().unwrap_or(task_arn)
+}
+
 /// タスク ARN の ID の先頭 8 文字。ECS コンソールの一覧で見分けられる長さ
 pub fn short_task_id(task_arn: &str) -> &str {
-    let id = task_arn.rsplit('/').next().unwrap_or(task_arn);
+    let id = task_id(task_arn);
     id.get(..8).unwrap_or(id)
 }
 
@@ -460,6 +465,18 @@ mod tests {
         assert_eq!(
             duration(Duration::from_secs(2 * 3600 + 3 * 60 + 9)),
             "2 時間 3 分"
+        );
+    }
+
+    #[test]
+    fn task_id_is_the_last_segment_of_the_arn_with_or_without_cluster() {
+        assert_eq!(
+            task_id("arn:aws:ecs:us-east-1:123456789012:task/example-staging/0123456789abcdef"),
+            "0123456789abcdef"
+        );
+        assert_eq!(
+            task_id("arn:aws:ecs:us-east-1:123456789012:task/0123456789abcdef"),
+            "0123456789abcdef"
         );
     }
 
