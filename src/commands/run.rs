@@ -1,6 +1,8 @@
 use std::env::{self, VarError};
+use std::time::Instant;
 
 use anyhow::{Result, bail};
+use aws_sdk_ecs::types::{AssignPublicIp, AwsVpcConfiguration};
 
 use crate::agent_wait;
 use crate::aws_profile::AwsProfile;
@@ -10,6 +12,7 @@ use crate::prompt;
 use crate::report::report;
 use crate::session::{self, Target};
 use crate::signals::{Signals, Stage};
+use crate::ui::{self, Style};
 
 mod stop;
 
@@ -18,32 +21,24 @@ pub use stop::StopAbandoned;
 pub async fn run(name: &str, profile: &Profile, yes: bool) -> Result<()> {
     let plugin = session::find_plugin()?;
     let shell_command = session::shell_command(name);
+    let style = Style::current();
+    report!();
     report!(
-        "対象: region={} cluster={} service={} container={}",
-        profile.region,
+        "  {}  →  {} / {} / {}",
+        style.bold(name),
         profile.cluster,
         profile.service,
         profile.container
     );
 
     let aws_profile = AwsProfile::resolve(profile.aws_profile.as_deref())?;
-    report!("AWS プロファイル: {aws_profile}");
+    report!("  AWS  {aws_profile} · {}", profile.region);
     let started_by = ecs::started_by(&current_user()?)?;
 
     let client = ecs::client(&profile.region, &aws_profile).await;
     let snapshot = ecs::describe_service(&client, &profile.cluster, &profile.service).await?;
-    let network = &snapshot.network;
-    report!("サブネット: {}", network.subnets().join(", "));
-    report!(
-        "セキュリティグループ: {}",
-        network.security_groups().join(", ")
-    );
-    report!(
-        "パブリック IP の割り当て: {}",
-        network
-            .assign_public_ip()
-            .map_or("(未指定)", |a| a.as_str())
-    );
+    report!("{}", style.note(network_line(&snapshot.network)));
+    report!();
     prompt::confirm_launch(name, profile, yes)?;
 
     // RunTask の後で登録すると、RunTask の最中のシグナルで ARN を知らないまま終了し、タスクが残る。ここで受けたシグナルは Agent 待ちの入口で拾って止める
@@ -56,11 +51,22 @@ pub async fn run(name: &str, profile: &Profile, yes: bool) -> Result<()> {
         &started_by,
     )
     .await?;
-    report!("タスクを起動しました: {}", task.task_arn);
-    report!("タスク定義: {}", task.task_definition_arn);
-    report!("startedBy: {started_by}");
-    report!("12 時間後に自動で止まります");
+    report!(
+        "{}",
+        style.success(format!(
+            "タスクを起動しました  {}（{}）",
+            ui::short_task_id(&task.task_arn),
+            ui::task_definition_name(&task.task_definition_arn)
+        ))
+    );
+    report!(
+        "{}",
+        style.note(format!(
+            "12 時間後に自動で止まります · startedBy {started_by}"
+        ))
+    );
 
+    let mut entered_at: Option<Instant> = None;
     // ここから先の `?` は async ブロックを抜けるだけで、どのエラーでも下の stop_after がタスクを止める
     let used: Result<()> = async {
         let enter = async {
@@ -71,6 +77,8 @@ pub async fn run(name: &str, profile: &Profile, yes: bool) -> Result<()> {
                 &profile.container,
             )
             .await?;
+            report!("{}", style.note("exit で抜けるとタスクを止めます"));
+            report!();
             let target = Target {
                 region: &profile.region,
                 cluster: &profile.cluster,
@@ -88,6 +96,7 @@ pub async fn run(name: &str, profile: &Profile, yes: bool) -> Result<()> {
             .await
         };
         let mut child = signals.watch(Stage::Preparing, enter).await??;
+        entered_at = Some(Instant::now());
         let status = match signals
             .watch(Stage::InSession, session::wait(&mut child))
             .await
@@ -95,25 +104,47 @@ pub async fn run(name: &str, profile: &Profile, yes: bool) -> Result<()> {
             Ok(status) => status?,
             Err(interruption) => {
                 if let Err(error) = session::kill(&mut child).await {
-                    report!("{error:#}");
+                    ui::report_error(&error);
                 }
                 return Err(interruption.into());
             }
         };
         if let Some(message) = session::abnormal_exit_message(status) {
-            report!("{message}");
+            report!("{}", style.warning(message));
         }
         Ok(())
     }
     .await;
+    let in_session = entered_at.map(|at| at.elapsed());
     stop::stop_after(
         &client,
         &profile.cluster,
         &task.task_arn,
         used,
+        in_session,
         &mut signals,
     )
     .await
+}
+
+/// `ネットワーク  subnet-01234567…, subnet-89abcdef… · sg-01234567… · パブリック IP なし`
+fn network_line(network: &AwsVpcConfiguration) -> String {
+    let ids = |ids: &[String]| {
+        ids.iter()
+            .map(|id| ui::short_resource_id(id))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let public_ip = match network.assign_public_ip() {
+        Some(AssignPublicIp::Enabled) => "あり",
+        Some(AssignPublicIp::Disabled) => "なし",
+        _ => "(未指定)",
+    };
+    format!(
+        "ネットワーク  {} · {} · パブリック IP {public_ip}",
+        ids(network.subnets()),
+        ids(network.security_groups())
+    )
 }
 
 fn current_user() -> Result<String> {
@@ -121,5 +152,36 @@ fn current_user() -> Result<String> {
         Ok(user) => Ok(user),
         Err(VarError::NotPresent) => bail!("環境変数 USER が設定されていません"),
         Err(VarError::NotUnicode(_)) => bail!("環境変数 USER が UTF-8 ではありません"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn network_line_shows_shortened_subnets_security_groups_and_public_ip() {
+        let network = AwsVpcConfiguration::builder()
+            .subnets("subnet-0123456789abcdef0")
+            .subnets("subnet-89abcdef012345678")
+            .security_groups("sg-0123456789abcdef0")
+            .assign_public_ip(AssignPublicIp::Disabled)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            network_line(&network),
+            "ネットワーク  subnet-01234567…, subnet-89abcdef… · sg-01234567… · パブリック IP なし"
+        );
+    }
+
+    #[test]
+    fn network_line_says_unspecified_when_public_ip_is_not_set() {
+        let network = AwsVpcConfiguration::builder()
+            .subnets("subnet-0123")
+            .build()
+            .unwrap();
+
+        assert!(network_line(&network).ends_with("パブリック IP (未指定)"));
     }
 }

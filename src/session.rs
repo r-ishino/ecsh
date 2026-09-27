@@ -13,15 +13,19 @@ use aws_sdk_ecs::operation::execute_command::builders::ExecuteCommandFluentBuild
 use serde_json::json;
 use tokio::process::{Child, Command};
 
+use crate::ui::Guidance;
+
 const PLUGIN: &str = "session-manager-plugin";
 
 /// PATH から session-manager-plugin を探す
 pub fn find_plugin() -> Result<PathBuf> {
     let path = env::var_os("PATH").unwrap_or_default();
-    find_in(&path).with_context(|| {
-        format!(
-            "{PLUGIN} が PATH にありません。インストールしてください: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html"
+    find_in(&path).ok_or_else(|| {
+        Guidance::new(
+            format!("{PLUGIN} が PATH にありません"),
+            "インストールしてください: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html",
         )
+        .into()
     })
 }
 

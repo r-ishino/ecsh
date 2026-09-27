@@ -61,6 +61,26 @@ ecsh gc staging    # stop leftover ecsh tasks
 
 `run` starts `/bin/sh` in the container, with the profile name in the prompt (`[staging] /app # `). When you exit the shell, ecsh stops the task. Even if the session ends abnormally (for example, the connection drops), ecsh still stops the task and exits with 0 as long as stopping succeeds; it only prints the session's exit status.
 
+`run` prints its progress to stderr (in Japanese). It looks roughly like this:
+
+```
+  staging  →  example-staging / worker / app
+  AWS  example（設定の aws_profile）· us-east-1
+  ネットワーク  subnet-01234567… · sg-01234567… · パブリック IP なし
+
+✓ タスクを起動しました  0123abcd（worker:42）
+  12 時間後に自動で止まります · startedBy ecsh/alice
+✓ 入れるようになりました（45 秒）
+  exit で抜けるとタスクを止めます
+
+[staging] /app # exit
+✓ タスクを止めました  0123abcd（入っていた時間 12 分）
+```
+
+The task is shown by the first 8 characters of its ID and the task definition by `family:revision`; the full task ARN is printed only when you may need to stop the task yourself. While waiting to get in, a single spinner line shows the elapsed time and the task / agent status. Errors are shown as a one-line summary marked with `✗`, followed by what to do (if any) and the underlying causes.
+
+When stderr is not a terminal, or the `NO_COLOR` environment variable is set, ecsh prints no colors or spinner; while waiting, it prints one line each time the status changes.
+
 Signals after the task has been launched:
 
 - Ctrl-C, closing the terminal (SIGHUP), or SIGTERM while waiting to get in stops the task, then exits

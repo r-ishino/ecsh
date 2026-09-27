@@ -1,4 +1,5 @@
 use std::fmt;
+use std::time::Duration;
 
 use anyhow::Result;
 use aws_sdk_ecs::Client;
@@ -6,6 +7,7 @@ use aws_sdk_ecs::Client;
 use crate::ecs;
 use crate::report::report;
 use crate::signals::{Interruption, Signal, Signals, Stage};
+use crate::ui::{self, Guidance, Style};
 
 /// 起動したタスクを止め、タスクを使っていた間の結果 `used` と StopTask の結果をまとめて返す
 pub async fn stop_after(
@@ -13,8 +15,10 @@ pub async fn stop_after(
     cluster: &str,
     task_arn: &str,
     used: Result<()>,
+    in_session: Option<Duration>,
     signals: &mut Signals,
 ) -> Result<()> {
+    let style = Style::current();
     let stage = match used
         .as_ref()
         .err()
@@ -22,8 +26,11 @@ pub async fn stop_after(
     {
         Some(interruption) => {
             report!(
-                "{} を受けたので、タスクを止めてから終了します（もう一度 Ctrl-C を押すと待たずに終了します）",
-                interruption.signal
+                "{}",
+                style.warning(format!(
+                    "{} を受けたので、タスクを止めてから終了します（もう一度 Ctrl-C を押すと待たずに終了します）",
+                    interruption.signal
+                ))
             );
             Stage::StoppingOnSignal
         }
@@ -37,7 +44,7 @@ pub async fn stop_after(
             signal: interruption.signal,
         })?;
     if stopped.is_ok() {
-        report!("タスクを止めました: {task_arn}");
+        report!("{}", style.success(stopped_message(task_arn, in_session)));
     }
     conclude(used, stopped, task_arn)
 }
@@ -61,16 +68,30 @@ impl fmt::Display for StopAbandoned {
 
 impl std::error::Error for StopAbandoned {}
 
+/// `タスクを止めました  01234567（入っていた時間 12 分）`。セッションに入る前に止めたときは時間を添えない
+fn stopped_message(task_arn: &str, in_session: Option<Duration>) -> String {
+    let id = ui::short_task_id(task_arn);
+    match in_session {
+        Some(elapsed) => format!(
+            "タスクを止めました  {id}（入っていた時間 {}）",
+            ui::duration(elapsed)
+        ),
+        None => format!("タスクを止めました  {id}"),
+    }
+}
+
 fn conclude(used: Result<()>, stopped: Result<()>, task_arn: &str) -> Result<()> {
     let Err(stop_error) = stopped else {
         return used;
     };
-    let left_behind = format!("タスクを止められませんでした: {task_arn}。`ecsh gc` で止められます");
-    let message = match used {
-        Ok(()) => left_behind,
-        Err(error) => format!("{left_behind}\n止める前に起きたエラー: {error:#}"),
+    let stop_error = match used {
+        Ok(()) => stop_error,
+        Err(error) => stop_error.context(format!("止める前に起きたエラー: {error:#}")),
     };
-    Err(stop_error.context(message))
+    Err(stop_error.context(Guidance::new(
+        format!("タスクを止められませんでした: {task_arn}"),
+        "`ecsh gc` で止められます",
+    )))
 }
 
 #[cfg(test)]
@@ -79,7 +100,11 @@ mod tests {
 
     use super::*;
 
-    const TASK_ARN: &str = "arn:aws:ecs:us-east-1:123456789012:task/c/abc";
+    const TASK_ARN: &str = "arn:aws:ecs:us-east-1:123456789012:task/c/0123456789abcdef";
+
+    fn shown(error: &anyhow::Error) -> Vec<String> {
+        Style::PLAIN.error_lines(error)
+    }
 
     #[test]
     fn stopping_after_successful_use_succeeds() {
@@ -94,13 +119,17 @@ mod tests {
     }
 
     #[test]
-    fn stop_failure_names_the_task_left_behind_and_points_to_gc() {
+    fn stop_failure_names_the_full_task_arn_left_behind_and_points_to_gc() {
         let error = conclude(Ok(()), Err(anyhow!("expired token")), TASK_ARN).unwrap_err();
-        let message = format!("{error:#}");
 
-        assert!(message.contains(TASK_ARN));
-        assert!(message.contains("`ecsh gc` で止められます"));
-        assert!(message.contains("expired token"));
+        assert_eq!(
+            shown(&error),
+            [
+                format!("✗ タスクを止められませんでした: {TASK_ARN}"),
+                "  `ecsh gc` で止められます".into(),
+                "  expired token".into(),
+            ]
+        );
     }
 
     #[test]
@@ -111,11 +140,31 @@ mod tests {
             TASK_ARN,
         )
         .unwrap_err();
-        let message = format!("{error:#}");
 
-        assert!(message.contains(TASK_ARN));
-        assert!(message.contains("`ecsh gc` で止められます"));
-        assert!(message.contains("agent timed out"));
-        assert!(message.contains("expired token"));
+        assert_eq!(
+            shown(&error),
+            [
+                format!("✗ タスクを止められませんでした: {TASK_ARN}"),
+                "  `ecsh gc` で止められます".into(),
+                "  止める前に起きたエラー: agent timed out".into(),
+                "  expired token".into(),
+            ]
+        );
+    }
+
+    #[test]
+    fn stopped_message_shows_short_task_id_and_time_spent_in_the_session() {
+        assert_eq!(
+            stopped_message(TASK_ARN, Some(Duration::from_secs(720))),
+            "タスクを止めました  01234567（入っていた時間 12 分）"
+        );
+    }
+
+    #[test]
+    fn stopped_message_before_entering_the_session_has_no_time() {
+        assert_eq!(
+            stopped_message(TASK_ARN, None),
+            "タスクを止めました  01234567"
+        );
     }
 }
