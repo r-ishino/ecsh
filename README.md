@@ -43,7 +43,14 @@ region = "us-east-1"
 cluster = "example-staging"
 service = "worker"   # ネットワーク設定のコピー元にするサービス
 container = "app"    # exec で入るコンテナ
+aws_profile = "example"  # 省略可
 ```
+
+AWS プロファイルは次の順で決まります。`run` は使ったプロファイルとその出どころを表示します。
+
+1. 環境変数 `AWS_PROFILE`
+2. 設定の `aws_profile`
+3. どちらも無ければ AWS SDK の既定の解決順
 
 ## 使い方
 

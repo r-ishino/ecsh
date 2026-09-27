@@ -1,3 +1,4 @@
+mod aws_profile;
 mod cli;
 mod commands;
 mod config;
