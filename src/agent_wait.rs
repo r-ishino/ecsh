@@ -1,11 +1,11 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use aws_sdk_ecs::Client;
 use aws_sdk_ecs::operation::describe_tasks::DescribeTasksOutput;
 use aws_sdk_ecs::types::ManagedAgentName;
 
-use crate::report::report;
+use crate::ui::{self, Waiting};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
 const TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -17,30 +17,23 @@ pub async fn wait_until_exec_ready(
     task_arn: &str,
     container: &str,
 ) -> Result<String> {
-    report!("ExecuteCommandAgent の起動を待っています（上限 5 分）");
-    let started = Instant::now();
-    let mut previous: Option<Observation> = None;
+    let mut waiting = Waiting::start("入れるようになるのを待っています", "上限 5 分");
     loop {
         let observation = describe(client, cluster, task_arn, container).await?;
-        let elapsed = started.elapsed();
-        if previous
-            .as_ref()
-            .is_none_or(|p| p.status_changed(&observation))
-        {
-            report!("{}", status_line(elapsed, &observation));
-        }
-        match next_step(&observation, elapsed)? {
+        waiting.update(status_text(&observation));
+        match next_step(&observation, waiting.elapsed())? {
             Progress::Ready => {
-                report!("ExecuteCommandAgent が RUNNING になりました");
-                return observation.runtime_id.with_context(|| {
+                let runtime_id = observation.runtime_id.with_context(|| {
                     format!(
                         "DescribeTasks の応答にコンテナ `{container}` の runtimeId がありません"
                     )
-                });
+                })?;
+                let took = ui::duration(waiting.elapsed());
+                waiting.finish(format!("入れるようになりました（{took}）"));
+                return Ok(runtime_id);
             }
             Progress::Waiting => {}
         }
-        previous = Some(observation);
         tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
@@ -82,10 +75,6 @@ struct Agent {
 impl Observation {
     fn agent_status(&self) -> &str {
         self.agent.as_ref().map_or("(未起動)", |a| &a.status)
-    }
-
-    fn status_changed(&self, current: &Observation) -> bool {
-        self.task_status != current.task_status || self.agent_status() != current.agent_status()
     }
 }
 
@@ -158,13 +147,10 @@ fn next_step(observation: &Observation, elapsed: Duration) -> Result<Progress> {
     Ok(Progress::Waiting)
 }
 
-/// `[00:21] タスク=PENDING Agent=(未起動)`
-fn status_line(elapsed: Duration, observation: &Observation) -> String {
-    let seconds = elapsed.as_secs();
+/// `タスク RUNNING · Agent PENDING`
+fn status_text(observation: &Observation) -> String {
     format!(
-        "[{:02}:{:02}] タスク={} Agent={}",
-        seconds / 60,
-        seconds % 60,
+        "タスク {} · Agent {}",
         observation.task_status,
         observation.agent_status()
     )
@@ -337,26 +323,14 @@ mod tests {
     }
 
     #[test]
-    fn change_in_task_or_agent_status_is_detected() {
-        let before = observation("PENDING", None);
-
-        assert!(before.status_changed(&observation("RUNNING", None)));
-        assert!(before.status_changed(&observation("PENDING", Some("PENDING"))));
-        assert!(!before.status_changed(&observation("PENDING", None)));
-    }
-
-    #[test]
-    fn status_line_shows_elapsed_minutes_and_seconds_with_task_and_agent_status() {
+    fn status_shows_task_and_agent_status() {
         assert_eq!(
-            status_line(Duration::from_secs(21), &observation("PENDING", None)),
-            "[00:21] タスク=PENDING Agent=(未起動)"
+            status_text(&observation("PENDING", None)),
+            "タスク PENDING · Agent (未起動)"
         );
         assert_eq!(
-            status_line(
-                Duration::from_millis(125_900),
-                &observation("RUNNING", Some("PENDING"))
-            ),
-            "[02:05] タスク=RUNNING Agent=PENDING"
+            status_text(&observation("RUNNING", Some("PENDING"))),
+            "タスク RUNNING · Agent PENDING"
         );
     }
 }

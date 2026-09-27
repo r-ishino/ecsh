@@ -8,6 +8,7 @@ mod prompt;
 mod report;
 mod session;
 mod signals;
+mod ui;
 
 use std::process::ExitCode;
 
@@ -20,6 +21,7 @@ use crate::config::Config;
 use crate::prompt::Abort;
 use crate::report::report;
 use crate::signals::Interruption;
+use crate::ui::Style;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -36,10 +38,10 @@ async fn main() -> ExitCode {
         return ExitCode::from(interruption.signal.exit_code());
     }
     if let Some(abandoned) = error.downcast_ref::<StopAbandoned>() {
-        report!("{abandoned}");
+        report!("{}", Style::current().warning(abandoned));
         return ExitCode::from(abandoned.signal.exit_code());
     }
-    report!("Error: {error:?}");
+    ui::report_error(&error);
     ExitCode::FAILURE
 }
 
