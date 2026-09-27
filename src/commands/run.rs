@@ -5,6 +5,7 @@ use anyhow::{Result, bail};
 use aws_sdk_ecs::types::{AssignPublicIp, AwsVpcConfiguration};
 
 use crate::agent_wait;
+use crate::aws_error;
 use crate::aws_profile::AwsProfile;
 use crate::config::Profile;
 use crate::ecs;
@@ -35,8 +36,11 @@ pub async fn run(name: &str, profile: &Profile, yes: bool) -> Result<()> {
     report!("  AWS  {aws_profile} · {}", profile.region);
     let started_by = ecs::started_by(&current_user()?)?;
 
+    let explain = |error| aws_error::explain(error, &aws_profile);
     let client = ecs::client(&profile.region, &aws_profile).await;
-    let snapshot = ecs::describe_service(&client, &profile.cluster, &profile.service).await?;
+    let snapshot = ecs::describe_service(&client, &profile.cluster, &profile.service)
+        .await
+        .map_err(explain)?;
     report!("{}", style.note(network_line(&snapshot.network)));
     report!();
     prompt::confirm_launch(name, profile, yes)?;
@@ -50,7 +54,8 @@ pub async fn run(name: &str, profile: &Profile, yes: bool) -> Result<()> {
         &snapshot,
         &started_by,
     )
-    .await?;
+    .await
+    .map_err(explain)?;
     report!(
         "{}",
         style.success(format!(
@@ -114,7 +119,8 @@ pub async fn run(name: &str, profile: &Profile, yes: bool) -> Result<()> {
         }
         Ok(())
     }
-    .await;
+    .await
+    .map_err(explain);
     let in_session = entered_at.map(|at| at.elapsed());
     stop::stop_after(
         &client,
@@ -123,6 +129,7 @@ pub async fn run(name: &str, profile: &Profile, yes: bool) -> Result<()> {
         used,
         in_session,
         &mut signals,
+        &aws_profile,
     )
     .await
 }
