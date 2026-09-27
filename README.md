@@ -2,7 +2,7 @@
 
 A CLI that launches a one-off task on Amazon ECS, drops you into it with ECS Exec, and stops the task when you exit.
 
-> **Work in progress**: `run` currently only launches the one-off task. It does not drop you into the task yet, and it does not stop the task automatically, so stop the launched task yourself from the AWS console or CLI (if you forget, it stops on its own after 12 hours).
+> **Work in progress**: `run` does not drop you into the task yet. It launches the one-off task, waits until the ExecuteCommandAgent is RUNNING, and then stops the task.
 
 ## Why
 
@@ -28,7 +28,7 @@ ecsh combines these into a single command:
 ## Installation
 
 ```sh
-cargo install --git https://github.com/r-ishino/ecsh
+cargo install --git https://github.com/r-ishino/ecsh --locked
 ```
 
 ## Configuration
