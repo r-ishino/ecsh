@@ -80,6 +80,23 @@ pub enum Command {
         /// 一覧を出さず、直近の 1 件を開く。プロファイルを省略したら、プロファイルを問わず直近
         #[arg(long)]
         last: bool,
+
+        /// 出力を流す代わりに、CloudWatch Logs のページをブラウザで開く
+        #[arg(long)]
+        open: bool,
+    },
+    /// ecsh が起動して動いているタスクを選び、タスクの詳細かログを AWS コンソールで開く
+    Open {
+        /// 設定ファイルの [profiles.<名前>]。省略すると一覧から選ぶ
+        profile: Option<String>,
+
+        /// 選ばせずにタスクの詳細を開く
+        #[arg(long, conflicts_with = "logs")]
+        task: bool,
+
+        /// 選ばせずにログ（CloudWatch Logs）を開く。run のタスクだけ
+        #[arg(long)]
+        logs: bool,
     },
 }
 
@@ -271,7 +288,7 @@ mod tests {
 
     fn parse_logs(args: &[&str]) -> (Option<String>, bool) {
         match Cli::try_parse_from(args).unwrap().command {
-            Command::Logs { profile, last } => (profile, last),
+            Command::Logs { profile, last, .. } => (profile, last),
             command => panic!("logs として解釈されない: {command:?}"),
         }
     }
@@ -287,8 +304,45 @@ mod tests {
     }
 
     #[test]
-    fn logs_does_not_accept_open_yet() {
-        assert!(Cli::try_parse_from(["ecsh", "logs", "--open"]).is_err());
+    fn logs_open_is_accepted_with_or_without_last() {
+        let parse_open = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command {
+            Command::Logs { last, open, .. } => (last, open),
+            command => panic!("logs として解釈されない: {command:?}"),
+        };
+
+        assert_eq!(parse_open(&["ecsh", "logs"]), (false, false));
+        assert_eq!(parse_open(&["ecsh", "logs", "--open"]), (false, true));
+        assert_eq!(
+            parse_open(&["ecsh", "logs", "staging", "--last", "--open"]),
+            (true, true)
+        );
+    }
+
+    fn parse_open(args: &[&str]) -> (Option<String>, bool, bool) {
+        match Cli::try_parse_from(args).unwrap().command {
+            Command::Open {
+                profile,
+                task,
+                logs,
+            } => (profile, task, logs),
+            command => panic!("open として解釈されない: {command:?}"),
+        }
+    }
+
+    #[test]
+    fn open_profile_can_be_omitted_and_task_or_logs_skips_the_page_choice() {
+        assert_eq!(parse_open(&["ecsh", "open"]), (None, false, false));
+        assert_eq!(
+            parse_open(&["ecsh", "open", "staging", "--task"]),
+            (Some("staging".into()), true, false)
+        );
+        assert_eq!(parse_open(&["ecsh", "open", "--logs"]), (None, false, true));
+    }
+
+    #[test]
+    fn open_does_not_accept_both_task_and_logs_nor_all() {
+        assert!(Cli::try_parse_from(["ecsh", "open", "--task", "--logs"]).is_err());
+        assert!(Cli::try_parse_from(["ecsh", "open", "--all"]).is_err());
     }
 
     fn size_request(args: &[&str]) -> SizeRequest {

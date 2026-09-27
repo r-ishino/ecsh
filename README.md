@@ -62,6 +62,7 @@ ecsh gc staging    # choose leftover ecsh tasks and stop them
 ecsh gc --all      # the same, across every profile in the config
 ecsh logs          # choose a profile, then one of your past runs, and show its output
 ecsh logs --last   # show the output of your latest run, whatever the profile
+ecsh open          # choose a profile, then one of your running tasks, and open it in the AWS console
 ```
 
 `exec` starts `/bin/sh` in the container, with the profile name in the prompt (`[staging] /app # `). When you exit the shell, ecsh stops the task. Even if the session ends abnormally (for example, the connection drops), ecsh still stops the task and exits with 0 as long as stopping succeeds; it only prints the session's exit status.
@@ -184,7 +185,27 @@ Without a profile name, `logs` first asks for a profile, the same as the other c
 
 `logs` exits with 0 once it has shown the run, whatever the command's exit code.
 
+`--open` opens the run's log stream in the CloudWatch Logs console in your browser instead of printing its output (`ecsh logs --open`, `ecsh logs --last --open`). It works for finished runs too, as long as the log stream is still kept. See [open](#open) for how the browser is opened.
+
 The history lives in `history.jsonl` under the state directory (the same directory as `sessions/`). `run` adds a line each time it launches a task and records the exit code and time taken once it sees the task stop. Only the latest 100 runs are kept. `exec` is not recorded, since its task only runs `sleep`. Only runs launched from this machine are listed.
+
+### open
+
+`ecsh open` opens one of your running tasks in the AWS console in your browser.
+
+```sh
+ecsh open         # choose a profile, a task, then the task details or its logs
+ecsh open --logs  # skip the last choice and open the logs (CloudWatch Logs)
+ecsh open --task  # skip the last choice and open the task details (ECS)
+```
+
+Without a profile name, `open` first asks for a profile, the same as the other commands, then lists the same tasks as `ps` with the task ID, the connection, the status, the time since launch, and the task definition. With a single task, the list is skipped; with none, `open` says so and exits with 0. Passing the name (`ecsh open staging`) skips the profile list.
+
+For a run task, `open` then asks whether to open the task details or the logs. A task launched by `exec` only runs `sleep`, so its logs are empty: `open` goes straight to the task details, and `--logs` is an error. When the container does not use `awslogs` (with `awslogs-group` and `awslogs-stream-prefix`), the logs cannot be opened, and `open` goes to the task details. The lists cannot be shown when stdin is not a terminal; pass the profile name, and `--task` or `--logs` for a run task.
+
+`open` prints the URL to stderr and passes it to macOS's `open` command, which opens it in your default browser. Only running tasks are listed; to open the logs of a run that has finished, use `ecsh logs --open`.
+
+The browser uses its own AWS console sign-in, which ecsh cannot switch. If the browser is signed in to a different AWS account, the console says the task or log group is not found; sign in to the account of the profile and open the URL again.
 
 ### Task size
 

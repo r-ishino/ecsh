@@ -4,6 +4,7 @@ mod aws_profile;
 mod cli;
 mod commands;
 mod config;
+mod console;
 mod ecs;
 mod history;
 mod logs;
@@ -22,7 +23,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use crate::cli::{Cli, Command};
-use crate::commands::StopAbandoned;
+use crate::commands::{Page, StopAbandoned};
 use crate::config::Config;
 use crate::prompt::Abort;
 use crate::report::report;
@@ -93,9 +94,21 @@ async fn try_main() -> Result<ExitCode> {
             let (name, profile) = prompt::select_profile(&config, profile.as_deref())?;
             commands::gc(name, profile, yes).await?;
         }
-        Command::Logs { profile, last } => {
-            let code = commands::logs(&config, profile.as_deref(), last).await?;
+        Command::Logs {
+            profile,
+            last,
+            open,
+        } => {
+            let code = commands::logs(&config, profile.as_deref(), last, open).await?;
             return Ok(ExitCode::from(code));
+        }
+        Command::Open {
+            profile,
+            task,
+            logs,
+        } => {
+            let (name, profile) = prompt::select_profile(&config, profile.as_deref())?;
+            commands::open(name, profile, Page::from_flags(task, logs)).await?;
         }
     }
     Ok(ExitCode::SUCCESS)
