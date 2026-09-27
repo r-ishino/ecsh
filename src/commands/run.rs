@@ -6,10 +6,11 @@ use anyhow::{Result, bail};
 use crate::aws_profile::AwsProfile;
 use crate::config::Profile;
 use crate::ecs;
+use crate::prompt;
 
 mod stop;
 
-pub async fn run(profile: &Profile) -> Result<()> {
+pub async fn run(name: &str, profile: &Profile, yes: bool) -> Result<()> {
     eprintln!(
         "対象: region={} cluster={} service={} container={}",
         profile.region, profile.cluster, profile.service, profile.container
@@ -33,6 +34,7 @@ pub async fn run(profile: &Profile) -> Result<()> {
             .assign_public_ip()
             .map_or("(未指定)", |a| a.as_str())
     );
+    prompt::confirm_launch(name, profile, yes)?;
 
     let task = ecs::run_task(
         &client,
