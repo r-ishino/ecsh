@@ -2,7 +2,7 @@ use std::fmt;
 use std::io::{self, IsTerminal, Write};
 
 use anyhow::{Result, bail};
-use inquire::{InquireError, Select};
+use inquire::{InquireError, MultiSelect, Select};
 
 use crate::config::{Config, Profile};
 
@@ -44,6 +44,13 @@ pub trait Console {
     fn stdin_is_terminal(&self) -> bool;
     /// items から 1 つ選ばせて添字を返す。Esc で取りやめたら None
     fn select(&mut self, message: &str, items: Vec<String>) -> Result<Option<usize>>;
+    /// items から複数選ばせて添字を返す。defaults の添字は最初から選んである。Esc で取りやめたら None
+    fn multi_select(
+        &mut self,
+        message: &str,
+        items: Vec<String>,
+        defaults: &[usize],
+    ) -> Result<Option<Vec<usize>>>;
     /// question を出して 1 行読む。入力が終わっていれば空文字列
     fn read_line(&mut self, question: &str) -> Result<String>;
 }
@@ -61,6 +68,27 @@ impl Console for Terminal {
             .raw_prompt();
         match selected {
             Ok(option) => Ok(Some(option.index)),
+            Err(InquireError::OperationCanceled) => Ok(None),
+            Err(InquireError::OperationInterrupted) => Err(Abort::Interrupted.into()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn multi_select(
+        &mut self,
+        message: &str,
+        items: Vec<String>,
+        defaults: &[usize],
+    ) -> Result<Option<Vec<usize>>> {
+        let selected = MultiSelect::new(message, items)
+            .with_default(defaults)
+            .with_formatter(&|options| format!("{} 件", options.len()))
+            .with_help_message("↑↓ で移動、Space で選択を切り替え、Enter で決定、Esc で取りやめ")
+            .raw_prompt();
+        match selected {
+            Ok(options) => Ok(Some(
+                options.into_iter().map(|option| option.index).collect(),
+            )),
             Err(InquireError::OperationCanceled) => Ok(None),
             Err(InquireError::OperationInterrupted) => Err(Abort::Interrupted.into()),
             Err(error) => Err(error.into()),
@@ -205,6 +233,15 @@ mod tests {
         fn select(&mut self, _message: &str, items: Vec<String>) -> Result<Option<usize>> {
             self.shown_items = Some(items);
             Ok(self.selection)
+        }
+
+        fn multi_select(
+            &mut self,
+            _message: &str,
+            _items: Vec<String>,
+            _defaults: &[usize],
+        ) -> Result<Option<Vec<usize>>> {
+            unreachable!("プロファイルの選択と確認では複数選択を出さない")
         }
 
         fn read_line(&mut self, question: &str) -> Result<String> {

@@ -34,10 +34,18 @@ pub enum Command {
         #[arg(long, conflicts_with = "profile")]
         all: bool,
     },
-    /// 残ってしまった ecsh のタスクを止める
+    /// ecsh が起動して残ったタスクを、一覧から選んで止める
     Gc {
         /// 設定ファイルの [profiles.<名前>]。省略すると一覧から選ぶ
         profile: Option<String>,
+
+        /// 設定の全プロファイルを回って 1 つの一覧にまとめる
+        #[arg(long, conflicts_with = "profile")]
+        all: bool,
+
+        /// 一覧を出さず、止め忘れと不明のタスクを止める。run のタスクは止めない
+        #[arg(short, long)]
+        yes: bool,
     },
     /// 旧名の `run` で入ろうとした手を止め、`exec` を案内する。コマンドを流す `run` を作るまでの仮置き
     #[command(hide = true)]
@@ -78,7 +86,7 @@ mod tests {
             let profile = match cli.command {
                 Command::Exec { profile, .. }
                 | Command::Ps { profile, .. }
-                | Command::Gc { profile } => profile,
+                | Command::Gc { profile, .. } => profile,
                 command => panic!("{subcommand} として解釈されない: {command:?}"),
             };
             assert_eq!(profile, None, "{subcommand}");
@@ -98,9 +106,27 @@ mod tests {
     }
 
     #[test]
-    fn yes_is_only_accepted_by_exec() {
+    fn ps_does_not_accept_yes() {
         assert!(Cli::try_parse_from(["ecsh", "ps", "--yes"]).is_err());
-        assert!(Cli::try_parse_from(["ecsh", "gc", "-y"]).is_err());
+    }
+
+    #[test]
+    fn gc_accepts_all_and_yes_together_but_not_all_with_a_profile() {
+        let parse = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command {
+            Command::Gc { profile, all, yes } => (profile, all, yes),
+            command => panic!("gc として解釈されない: {command:?}"),
+        };
+
+        assert_eq!(
+            parse(&["ecsh", "gc", "staging"]),
+            (Some("staging".into()), false, false)
+        );
+        assert_eq!(
+            parse(&["ecsh", "gc", "-y", "staging"]),
+            (Some("staging".into()), false, true)
+        );
+        assert_eq!(parse(&["ecsh", "gc", "--all", "--yes"]), (None, true, true));
+        assert!(Cli::try_parse_from(["ecsh", "gc", "staging", "--all"]).is_err());
     }
 
     #[test]

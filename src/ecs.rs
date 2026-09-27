@@ -214,23 +214,30 @@ fn launched_from(output: RunTaskOutput) -> Result<LaunchedTask> {
     })
 }
 
-/// StopTask の reason。コンソールのタスクの停止理由に出る
+/// exec が抜けたときの StopTask の reason。コンソールのタスクの停止理由に出る
 pub const STOP_REASON: &str = "Stopped by ecsh";
+/// gc が止めたときの StopTask の reason
+pub const GC_STOP_REASON: &str = "ecsh gc";
 
-pub async fn stop_task(client: &Client, cluster: &str, task_arn: &str) -> Result<()> {
-    stop_task_request(client, cluster, task_arn)
+pub async fn stop_task(client: &Client, cluster: &str, task_arn: &str, reason: &str) -> Result<()> {
+    stop_task_request(client, cluster, task_arn, reason)
         .send()
         .await
         .with_context(|| format!("StopTask に失敗しました（cluster={cluster}）"))?;
     Ok(())
 }
 
-fn stop_task_request(client: &Client, cluster: &str, task_arn: &str) -> StopTaskFluentBuilder {
+fn stop_task_request(
+    client: &Client,
+    cluster: &str,
+    task_arn: &str,
+    reason: &str,
+) -> StopTaskFluentBuilder {
     client
         .stop_task()
         .cluster(cluster)
         .task(task_arn)
-        .reason(STOP_REASON)
+        .reason(reason)
 }
 
 /// run（R-19）が流しているタスクに付くタグ。exec のタスクには付かない
@@ -536,12 +543,20 @@ mod tests {
     #[test]
     fn stop_task_request_stops_the_launched_task_with_ecsh_as_reason() {
         let task_arn = "arn:aws:ecs:us-east-1:123456789012:task/c/abc";
-        let request = stop_task_request(&offline_client(), "c", task_arn);
+        let request = stop_task_request(&offline_client(), "c", task_arn, STOP_REASON);
         let input = request.as_input();
 
         assert_eq!(input.get_cluster().as_deref(), Some("c"));
         assert_eq!(input.get_task().as_deref(), Some(task_arn));
         assert_eq!(input.get_reason().as_deref(), Some("Stopped by ecsh"));
+    }
+
+    #[test]
+    fn gc_stops_tasks_with_ecsh_gc_as_reason() {
+        let task_arn = "arn:aws:ecs:us-east-1:123456789012:task/c/abc";
+        let request = stop_task_request(&offline_client(), "c", task_arn, GC_STOP_REASON);
+
+        assert_eq!(request.as_input().get_reason().as_deref(), Some("ecsh gc"));
     }
 
     #[test]
