@@ -40,7 +40,10 @@ pub async fn stop_after(
         None => Stage::Stopping,
     };
     let stopped = signals
-        .watch(stage, ecs::stop_task(client, cluster, task_arn))
+        .watch(
+            stage,
+            ecs::stop_task(client, cluster, task_arn, ecs::STOP_REASON),
+        )
         .await
         .map_err(|interruption| StopAbandoned {
             task_arn: task_arn.to_owned(),

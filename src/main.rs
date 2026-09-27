@@ -69,8 +69,10 @@ async fn try_main() -> Result<()> {
             let (name, profile) = prompt::select_profile(&config, profile.as_deref())?;
             commands::ps(name, profile).await
         }
-        Command::Gc { profile } => {
-            commands::gc(prompt::select_profile(&config, profile.as_deref())?.1)
+        Command::Gc { all: true, yes, .. } => commands::gc_all(&config, yes).await,
+        Command::Gc { profile, yes, .. } => {
+            let (name, profile) = prompt::select_profile(&config, profile.as_deref())?;
+            commands::gc(name, profile, yes).await
         }
         Command::Run { .. } => unreachable!("設定を読む前に案内して終えている"),
     }

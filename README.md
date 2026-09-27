@@ -56,7 +56,8 @@ The AWS profile is chosen in the following order. `exec` prints the profile it u
 ecsh exec staging  # launch a one-off task and get in; stop it when you exit
 ecsh ps staging    # list the tasks launched by ecsh that are still running
 ecsh ps --all      # the same, across every profile in the config
-ecsh gc staging    # stop leftover ecsh tasks
+ecsh gc staging    # choose leftover ecsh tasks and stop them
+ecsh gc --all      # the same, across every profile in the config
 ```
 
 `exec` starts `/bin/sh` in the container, with the profile name in the prompt (`[staging] /app # `). When you exit the shell, ecsh stops the task. Even if the session ends abnormally (for example, the connection drops), ecsh still stops the task and exits with 0 as long as stopping succeeds; it only prints the session's exit status.
@@ -109,6 +110,21 @@ ID        接続      状態     起動から     タスク定義  自動停止�
 - With no tasks, `ps` prints a line to stderr and exits with 0
 
 `ps --all` goes through every profile in parallel and adds a profile column. Profiles that point to the same region, cluster, and AWS profile are asked only once, under the name that comes first. A profile that fails (for example, an expired SSO session) is reported on stderr and skipped; `ps --all` fails only when every profile fails. When every profile succeeds, `ps --all` also removes lock files that no `exec` holds and whose tasks are no longer running.
+
+`gc` stops the tasks ecsh left behind, for example after ecsh was killed with `kill -9`, the machine lost power, or StopTask failed (they stop on their own after 12 hours anyway). It looks at the same tasks as `ps` and shows them as a checklist on stderr:
+
+- 止め忘れ (left behind) and 不明 (unknown) tasks are checked from the start; run tasks are listed unchecked, so they are stopped only when you check them yourself
+- Tasks that `exec` on this machine is in (接続中) are not listed; `gc` prints how many were left out
+- Each item shows the task ID, the connection, the time since launch, and the task definition. Toggle items with Space and press Enter to stop the checked ones. Pressing Enter with nothing checked, or Esc, cancels with exit status 1
+- With no tasks to list, `gc` says so and exits with 0
+
+`gc` stops the tasks one by one with the reason `ecsh gc`, without waiting for them to reach STOPPED, and prints `✓` or `✗` for each. If some of them fail, it still tries the rest and exits with 1 at the end. It also removes the lock files of the tasks it stopped.
+
+`--yes` (`-y`) skips the checklist and stops the left-behind and unknown tasks; it never stops run tasks. When stdin is not a terminal and `--yes` is not given, `gc` fails with an error without stopping anything.
+
+`gc --all` goes through every profile the same way as `ps --all` and puts all tasks in one checklist, with the profile name at the start of each item. `gc --all --yes` works too, which suits periodic cleanup: it leaves tasks in use and run tasks alone. As with `ps --all`, when every profile succeeds it also removes lock files that no `exec` holds and whose tasks are no longer running.
+
+All of `gc`'s output goes to stderr.
 
 `ecsh run` no longer gets you into a task; it launches nothing and points you to `ecsh exec`. It is reserved for a future subcommand that runs a command as the task's command.
 

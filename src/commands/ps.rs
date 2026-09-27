@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::time::SystemTime;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 use crate::config::{Config, Profile};
 use crate::ecs;
@@ -13,7 +13,7 @@ use crate::ui::{self, Style};
 
 use super::exec::current_user;
 
-mod listing;
+pub(super) mod listing;
 mod table;
 
 use listing::{ConnectionState, Scope};
@@ -42,30 +42,17 @@ pub async fn ps_all(config: &Config) -> Result<()> {
     let started_by = ecs::started_by(&current_user()?)?;
     let sessions_dir = session_lock::sessions_dir()?;
     let results = listing::list_each(&scopes, &started_by, &sessions_dir).await;
-
-    let style = Style::current();
-    let mut rows = Vec::new();
-    let mut failed = 0;
-    for (scope, result) in &results {
-        match result {
-            Ok(tasks) => rows.extend(tasks.iter().map(|task| Row {
-                profile: scope.name,
-                task,
-            })),
-            Err(error) => {
-                failed += 1;
-                let headline = format!("{} のタスクを取得できないので飛ばします", scope.name);
-                for line in style.warning_lines(headline, error) {
-                    report!("{line}");
-                }
-            }
-        }
-    }
-    if failed == scopes.len() {
-        bail!("どのプロファイルのタスクも取得できませんでした");
-    }
+    let gathered = listing::gather(&results)?;
+    let rows: Vec<Row<'_>> = gathered
+        .tasks
+        .iter()
+        .map(|(scope, task)| Row {
+            profile: scope.name,
+            task,
+        })
+        .collect();
     show(&rows, true, "ecsh gc --all")?;
-    if failed == 0 {
+    if gathered.complete {
         remove_stale_locks(&sessions_dir, &rows);
     }
     Ok(())

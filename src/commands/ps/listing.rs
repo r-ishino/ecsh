@@ -3,15 +3,16 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use futures_util::future::join_all;
 
 use crate::aws_error;
 use crate::aws_profile::AwsProfile;
 use crate::config::{Config, Profile};
 use crate::ecs::{self, OwnTask};
+use crate::report::report;
 use crate::session_lock::{self, Connection};
-use crate::ui;
+use crate::ui::{self, Style};
 
 /// タスクを問い合わせる先
 #[derive(Debug)]
@@ -130,6 +131,41 @@ pub async fn list_each<'s, 'a>(
             .map(|scope| async move { (scope, list_tasks(scope, started_by, sessions_dir).await) }),
     )
     .await
+}
+
+/// `list_each` の結果のうち、取れたタスク
+pub struct Gathered<'r, 'a> {
+    pub tasks: Vec<(&'r Scope<'a>, &'r ListedTask)>,
+    /// 全プロファイルのタスクが取れた。欠けていると、ロックファイルの片付けに使えない
+    pub complete: bool,
+}
+
+/// 取れたタスクを 1 つにまとめる。失敗したプロファイルは警告して飛ばし、全部失敗したらエラーにする
+pub fn gather<'r, 'a>(
+    results: &'r [(&'r Scope<'a>, Result<Vec<ListedTask>>)],
+) -> Result<Gathered<'r, 'a>> {
+    let style = Style::current();
+    let mut tasks = Vec::new();
+    let mut failed = 0;
+    for (scope, result) in results {
+        match result {
+            Ok(listed) => tasks.extend(listed.iter().map(|task| (*scope, task))),
+            Err(error) => {
+                failed += 1;
+                let headline = format!("{} のタスクを取得できないので飛ばします", scope.name);
+                for line in style.warning_lines(headline, error) {
+                    report!("{line}");
+                }
+            }
+        }
+    }
+    if failed == results.len() {
+        bail!("どのプロファイルのタスクも取得できませんでした");
+    }
+    Ok(Gathered {
+        tasks,
+        complete: failed == 0,
+    })
 }
 
 /// 持ち主のいないロックファイルのうち、`running` に無いタスクのものを消す
