@@ -1,10 +1,13 @@
 use std::env::{self, VarError};
+use std::time::Duration;
 
 use anyhow::{Result, bail};
 
 use crate::aws_profile::AwsProfile;
 use crate::config::Profile;
 use crate::ecs;
+
+mod stop;
 
 pub async fn run(profile: &Profile) -> Result<()> {
     eprintln!(
@@ -44,7 +47,14 @@ pub async fn run(profile: &Profile) -> Result<()> {
     eprintln!("startedBy: {started_by}");
     eprintln!("12 時間後に自動で止まります");
 
-    bail!("exec と StopTask は未実装です。タスクは AWS コンソールか CLI で止めてください")
+    // ここから先の `?` は async ブロックを抜けるだけで、どのエラーでも下の stop_after がタスクを止める
+    let used: Result<()> = async {
+        eprintln!("exec は未実装のため、5 秒後に止めます");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        Ok(())
+    }
+    .await;
+    stop::stop_after(&client, &profile.cluster, &task.task_arn, used).await
 }
 
 fn current_user() -> Result<String> {

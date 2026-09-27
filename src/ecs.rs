@@ -4,6 +4,7 @@ use aws_sdk_ecs::Client;
 use aws_sdk_ecs::operation::describe_services::DescribeServicesOutput;
 use aws_sdk_ecs::operation::run_task::RunTaskOutput;
 use aws_sdk_ecs::operation::run_task::builders::RunTaskFluentBuilder;
+use aws_sdk_ecs::operation::stop_task::builders::StopTaskFluentBuilder;
 use aws_sdk_ecs::types::{
     AwsVpcConfiguration, CapacityProviderStrategyItem, ContainerOverride, LaunchType,
     NetworkConfiguration, TaskOverride,
@@ -206,6 +207,25 @@ fn launched_from(output: RunTaskOutput) -> Result<LaunchedTask> {
     })
 }
 
+/// StopTask の reason。コンソールのタスクの停止理由に出る
+pub const STOP_REASON: &str = "Stopped by ecsh";
+
+pub async fn stop_task(client: &Client, cluster: &str, task_arn: &str) -> Result<()> {
+    stop_task_request(client, cluster, task_arn)
+        .send()
+        .await
+        .with_context(|| format!("StopTask に失敗しました（cluster={cluster}）"))?;
+    Ok(())
+}
+
+fn stop_task_request(client: &Client, cluster: &str, task_arn: &str) -> StopTaskFluentBuilder {
+    client
+        .stop_task()
+        .cluster(cluster)
+        .task(task_arn)
+        .reason(STOP_REASON)
+}
+
 #[cfg(test)]
 mod tests {
     use aws_sdk_ecs::types::{AssignPublicIp, Failure, Service, Task};
@@ -400,6 +420,17 @@ mod tests {
 
         assert!(message.contains("RESOURCE:MEMORY"));
         assert!(message.contains("not enough memory"));
+    }
+
+    #[test]
+    fn stop_task_request_stops_the_launched_task_with_ecsh_as_reason() {
+        let task_arn = "arn:aws:ecs:us-east-1:123456789012:task/c/abc";
+        let request = stop_task_request(&offline_client(), "c", task_arn);
+        let input = request.as_input();
+
+        assert_eq!(input.get_cluster().as_deref(), Some("c"));
+        assert_eq!(input.get_task().as_deref(), Some(task_arn));
+        assert_eq!(input.get_reason().as_deref(), Some("Stopped by ecsh"));
     }
 
     #[test]
