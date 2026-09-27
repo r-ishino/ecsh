@@ -76,7 +76,7 @@ ecsh gc staging    # stop leftover ecsh tasks
 ✓ タスクを止めました  0123abcd（入っていた時間 12 分）
 ```
 
-The task is shown by the first 8 characters of its ID and the task definition by `family:revision`; the full task ARN is printed only when you may need to stop the task yourself. While waiting to get in, a single spinner line shows the elapsed time and the task / agent status. Errors are shown as a one-line summary marked with `✗`, followed by what to do (if any) and the underlying causes.
+The task is shown by the first 8 characters of its ID and the task definition by `family:revision`; the full task ARN is printed only when you may need to stop the task yourself. While waiting to get in, a single spinner line shows the elapsed time and the task / agent status. Errors are shown as a one-line summary marked with `✗`, followed by what to do (if any) and the underlying causes. If an AWS call fails because the AWS SSO session has expired, ecsh tells you to run `aws sso login` with the AWS profile it resolved.
 
 When stderr is not a terminal, or the `NO_COLOR` environment variable is set, ecsh prints no colors or spinner; while waiting, it prints one line each time the status changes.
 

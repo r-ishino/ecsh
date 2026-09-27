@@ -101,7 +101,7 @@ impl Style {
         let mut chain = error.chain().map(ToString::to_string);
         let summary = chain.next().unwrap_or_default();
         let mut lines = vec![self.failure(summary)];
-        lines.extend(remedy_for(error).map(|remedy| self.remedy(remedy)));
+        lines.extend(remedies_for(error).map(|remedy| self.remedy(remedy)));
         lines.extend(
             chain
                 .flat_map(|cause| cause.lines().map(str::to_owned).collect::<Vec<_>>())
@@ -118,18 +118,20 @@ pub fn report_error(error: &anyhow::Error) {
     }
 }
 
-/// エラーに添える対処。無ければ None
-fn remedy_for(error: &anyhow::Error) -> Option<&str> {
-    error.downcast_ref::<Guidance>().map(|g| g.remedy.as_str())
+/// エラーに添える対処。連鎖の外側のものから順に、重なっていればすべて
+fn remedies_for(error: &anyhow::Error) -> impl Iterator<Item = &str> {
+    error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<Guidance>())
+        .map(|guidance| guidance.remedy.as_str())
 }
 
 /// 次にどうすればよいかを添えたエラー。表示は要約だけで、対処は `Style::error_lines` が別の行に出す
-///
-/// `anyhow::Context` の context として付けると、元のエラーの連鎖を残したまま対処を添えられる
 #[derive(Debug)]
 pub struct Guidance {
     summary: String,
     remedy: String,
+    cause: Option<anyhow::Error>,
 }
 
 impl Guidance {
@@ -137,7 +139,18 @@ impl Guidance {
         Self {
             summary: summary.into(),
             remedy: remedy.into(),
+            cause: None,
         }
+    }
+
+    /// 元のエラーの連鎖を残したまま、要約と対処を上に重ねる
+    ///
+    /// anyhow の context として付けないのは、context は `chain()` から型で取り出せず、対処が重なったときに外側の 1 つしか拾えないから
+    pub fn wrap(self, cause: anyhow::Error) -> anyhow::Error {
+        anyhow::Error::new(Self {
+            cause: Some(cause),
+            ..self
+        })
     }
 }
 
@@ -147,7 +160,11 @@ impl Display for Guidance {
     }
 }
 
-impl std::error::Error for Guidance {}
+impl std::error::Error for Guidance {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.cause.as_deref().map(|cause| cause as _)
+    }
+}
 
 /// 状態が変わるのを待つ間の表示。ターミナルならスピナー 1 行を更新し続け、そうでなければ状態が変わったときだけ 1 行出す
 ///
@@ -310,7 +327,7 @@ mod tests {
 
     #[test]
     fn plain_style_emits_no_escape_sequences() {
-        let error = anyhow!("expired token").context(Guidance::new("止められません", "gc"));
+        let error = Guidance::new("止められません", "gc").wrap(anyhow!("expired token"));
         let lines = [
             PLAIN.bold("staging"),
             PLAIN.success("起動しました"),
@@ -363,16 +380,35 @@ mod tests {
 
     #[test]
     fn guidance_puts_the_remedy_between_summary_and_causes() {
-        let error = anyhow!("expired token").context(Guidance::new(
-            "タスクを止められませんでした",
-            "`ecsh gc` で止められます",
-        ));
+        let error = Guidance::new("タスクを止められませんでした", "`ecsh gc` で止められます")
+            .wrap(anyhow!("expired token"));
 
         assert_eq!(
             PLAIN.error_lines(&error),
             [
                 "✗ タスクを止められませんでした",
                 "  `ecsh gc` で止められます",
+                "  expired token",
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_guidance_shows_every_remedy_outermost_first_and_keeps_inner_summaries() {
+        let inner = Guidance::new("セッションが切れています", "ログインしてください")
+            .wrap(anyhow!("expired token"))
+            .context("StopTask に失敗しました");
+        let error =
+            Guidance::new("タスクを止められませんでした", "`ecsh gc` で止められます").wrap(inner);
+
+        assert_eq!(
+            PLAIN.error_lines(&error),
+            [
+                "✗ タスクを止められませんでした",
+                "  `ecsh gc` で止められます",
+                "  ログインしてください",
+                "  StopTask に失敗しました",
+                "  セッションが切れています",
                 "  expired token",
             ]
         );

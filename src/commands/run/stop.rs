@@ -4,6 +4,8 @@ use std::time::Duration;
 use anyhow::Result;
 use aws_sdk_ecs::Client;
 
+use crate::aws_error;
+use crate::aws_profile::AwsProfile;
 use crate::ecs;
 use crate::report::report;
 use crate::signals::{Interruption, Signal, Signals, Stage};
@@ -17,6 +19,7 @@ pub async fn stop_after(
     used: Result<()>,
     in_session: Option<Duration>,
     signals: &mut Signals,
+    aws_profile: &AwsProfile,
 ) -> Result<()> {
     let style = Style::current();
     let stage = match used
@@ -42,7 +45,8 @@ pub async fn stop_after(
         .map_err(|interruption| StopAbandoned {
             task_arn: task_arn.to_owned(),
             signal: interruption.signal,
-        })?;
+        })?
+        .map_err(|error| aws_error::explain(error, aws_profile));
     if stopped.is_ok() {
         report!("{}", style.success(stopped_message(task_arn, in_session)));
     }
@@ -88,10 +92,11 @@ fn conclude(used: Result<()>, stopped: Result<()>, task_arn: &str) -> Result<()>
         Ok(()) => stop_error,
         Err(error) => stop_error.context(format!("止める前に起きたエラー: {error:#}")),
     };
-    Err(stop_error.context(Guidance::new(
+    Err(Guidance::new(
         format!("タスクを止められませんでした: {task_arn}"),
         "`ecsh gc` で止められます",
-    )))
+    )
+    .wrap(stop_error))
 }
 
 #[cfg(test)]
@@ -148,6 +153,28 @@ mod tests {
                 "  `ecsh gc` で止められます".into(),
                 "  止める前に起きたエラー: agent timed out".into(),
                 "  expired token".into(),
+            ]
+        );
+    }
+
+    #[test]
+    fn stop_failure_from_an_expired_sso_session_shows_both_gc_and_sso_login() {
+        let expired = Guidance::new(
+            "AWS の SSO セッションが切れています",
+            "`aws sso login` を実行してから、もう一度実行してください",
+        )
+        .wrap(anyhow!("StopTask に失敗しました（cluster=c）"));
+
+        let error = conclude(Ok(()), Err(expired), TASK_ARN).unwrap_err();
+
+        assert_eq!(
+            shown(&error),
+            [
+                format!("✗ タスクを止められませんでした: {TASK_ARN}"),
+                "  `ecsh gc` で止められます".into(),
+                "  `aws sso login` を実行してから、もう一度実行してください".into(),
+                "  AWS の SSO セッションが切れています".into(),
+                "  StopTask に失敗しました（cluster=c）".into(),
             ]
         );
     }
