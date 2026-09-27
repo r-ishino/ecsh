@@ -11,13 +11,14 @@ use crate::report::report;
 use crate::session::{self, Target};
 use crate::session_lock::{self, SessionLock};
 use crate::signals::{Signals, Stage};
+use crate::size::SizeRequest;
 use crate::ui::{self, Style};
 
 mod stop;
 
 pub use stop::StopAbandoned;
 
-pub async fn exec(name: &str, profile: &Profile, yes: bool) -> Result<()> {
+pub async fn exec(name: &str, profile: &Profile, yes: bool, size: SizeRequest) -> Result<()> {
     let plugin = session::find_plugin()?;
     let shell_command = session::shell_command(name);
     let style = Style::current();
@@ -26,7 +27,8 @@ pub async fn exec(name: &str, profile: &Profile, yes: bool) -> Result<()> {
         client,
         snapshot,
         started_by,
-    } = launch::prepare(name, profile, yes, None).await?;
+        size,
+    } = launch::prepare(name, profile, yes, size, None).await?;
     let explain = |error| aws_error::explain(error, &aws_profile);
 
     // RunTask の後で登録すると、RunTask の最中のシグナルで ARN を知らないまま終了し、タスクが残る。ここで受けたシグナルは Agent 待ちの入口で拾って止める
@@ -38,6 +40,7 @@ pub async fn exec(name: &str, profile: &Profile, yes: bool) -> Result<()> {
         &snapshot,
         &started_by,
         Workload::Shell,
+        size.as_ref(),
     )
     .await
     .map_err(explain)?;

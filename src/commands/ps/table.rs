@@ -11,12 +11,14 @@ pub struct Row<'a> {
     pub task: &'a ListedTask,
 }
 
-const HEADERS: [&str; 6] = [
+const HEADERS: [&str; 8] = [
     "ID",
     "接続",
     "状態",
     "起動から",
     "タスク定義",
+    "CPU",
+    "メモリ",
     "自動停止まで",
 ];
 const PROFILE_HEADER: &str = "プロファイル";
@@ -127,9 +129,15 @@ fn cells(row: &Row<'_>, with_profile: bool, now: SystemTime) -> Vec<Cell> {
             ui::task_definition_name(&task.task_definition_arn),
             row_tone,
         ),
+        Cell::new(or_not_applicable(task.cpu), row_tone),
+        Cell::new(or_not_applicable(task.memory), row_tone),
         Cell::new(until_auto_stop_text(task, now), row_tone),
     ]);
     cells
+}
+
+fn or_not_applicable(value: Option<impl ToString>) -> String {
+    value.map_or(NOT_APPLICABLE.to_owned(), |value| value.to_string())
 }
 
 /// 時計が戻って未来の時刻になっていたら 0 とみなす
@@ -162,6 +170,7 @@ fn until_auto_stop_text(task: &OwnTask, now: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::size::{Cpu, Memory};
 
     const NOW_SECS: u64 = 1_700_000_000;
 
@@ -187,6 +196,8 @@ mod tests {
                 created_at: Some(ago(created_ago)),
                 started_at: Some(ago(created_ago.saturating_sub(Duration::from_secs(30)))),
                 is_run: connection == ConnectionState::Run,
+                cpu: Some(Cpu::from_units(1024)),
+                memory: Some(Memory::from_mib(2048)),
             },
             connection,
         }
@@ -218,6 +229,8 @@ mod tests {
             "arn:aws:ecs:us-east-1:123456789012:task/c/fedcba9876543210".into();
         abandoned.task.task_definition_arn =
             "arn:aws:ecs:us-east-1:123456789012:task-definition/console:7".into();
+        abandoned.task.cpu = Some(Cpu::from_units(512));
+        abandoned.task.memory = Some(Memory::from_mib(4096));
 
         let lines = render(
             &[row(&connected), row(&abandoned)],
@@ -229,9 +242,9 @@ mod tests {
         assert_eq!(
             lines,
             [
-                "ID        接続      状態     起動から     タスク定義  自動停止まで",
-                "01234567  接続中    RUNNING  12 分        worker:42   11 時間 48 分",
-                "fedcba98  止め忘れ  RUNNING  2 時間 5 分  console:7   9 時間 55 分",
+                "ID        接続      状態     起動から     タスク定義  CPU       メモリ  自動停止まで",
+                "01234567  接続中    RUNNING  12 分        worker:42   1 vCPU    2 GB    11 時間 48 分",
+                "fedcba98  止め忘れ  RUNNING  2 時間 5 分  console:7   0.5 vCPU  4 GB    9 時間 55 分",
             ]
         );
     }
@@ -254,7 +267,7 @@ mod tests {
     fn abandoned_task_is_yellow_across_the_row() {
         let task = listed(ConnectionState::Abandoned, minutes(10));
 
-        assert_eq!(tones(&task), [Tone::Caution; 6]);
+        assert_eq!(tones(&task), [Tone::Caution; 8]);
         assert_eq!(
             cells(&row(&task), true, now())[0].tone,
             Tone::Caution,
@@ -284,6 +297,8 @@ mod tests {
                 Tone::Plain,
                 Tone::Alert,
                 Tone::Plain,
+                Tone::Plain,
+                Tone::Plain,
                 Tone::Plain
             ]
         );
@@ -294,7 +309,7 @@ mod tests {
         for connection in [ConnectionState::Connected, ConnectionState::Run] {
             assert_eq!(
                 tones(&listed(connection, minutes(600))),
-                [Tone::Plain; 6],
+                [Tone::Plain; 8],
                 "{connection:?}"
             );
         }
@@ -343,6 +358,18 @@ mod tests {
 
         assert_eq!(until_auto_stop_text(&pending, now()), "─");
         assert_eq!(until_auto_stop_text(&run, now()), "─");
+    }
+
+    #[test]
+    fn size_is_not_shown_when_the_task_has_none() {
+        let mut task = listed(ConnectionState::Connected, minutes(1));
+        task.task.cpu = None;
+        task.task.memory = None;
+
+        let cells = cells(&row(&task), false, now());
+
+        assert_eq!(cells[5], Cell::new("─", Tone::Plain));
+        assert_eq!(cells[6], Cell::new("─", Tone::Plain));
     }
 
     #[test]

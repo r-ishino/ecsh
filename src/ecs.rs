@@ -10,10 +10,11 @@ use aws_sdk_ecs::operation::stop_task::builders::StopTaskFluentBuilder;
 use aws_sdk_ecs::primitives::DateTime;
 use aws_sdk_ecs::types::{
     AwsVpcConfiguration, CapacityProviderStrategyItem, ContainerDefinition, ContainerOverride,
-    LaunchType, NetworkConfiguration, Tag, Task, TaskField, TaskOverride,
+    LaunchType, NetworkConfiguration, Tag, Task, TaskDefinition, TaskField, TaskOverride,
 };
 
 use crate::aws_profile::AwsProfile;
+use crate::size::{ContainerLimits, Cpu, DefinedSize, Definition, Memory, SizeOverride};
 
 pub async fn client(region: &str, aws_profile: &AwsProfile) -> Client {
     Client::new(&aws_profile.sdk_config(region).await)
@@ -154,11 +155,14 @@ pub async fn run_task(
     snapshot: &ServiceSnapshot,
     started_by: &str,
     workload: Workload<'_>,
+    size: Option<&SizeOverride>,
 ) -> Result<LaunchedTask> {
-    let output = run_task_request(client, cluster, container, snapshot, started_by, workload)
-        .send()
-        .await
-        .with_context(|| format!("RunTask に失敗しました（cluster={cluster}）"))?;
+    let output = run_task_request(
+        client, cluster, container, snapshot, started_by, workload, size,
+    )
+    .send()
+    .await
+    .with_context(|| format!("RunTask に失敗しました（cluster={cluster}）"))?;
     launched_from(output)
 }
 
@@ -169,6 +173,7 @@ fn run_task_request(
     snapshot: &ServiceSnapshot,
     started_by: &str,
     workload: Workload<'_>,
+    size: Option<&SizeOverride>,
 ) -> RunTaskFluentBuilder {
     let (command, tags) = match workload {
         Workload::Shell => (KEEPALIVE_COMMAND.map(String::from).to_vec(), None),
@@ -179,9 +184,17 @@ fn run_task_request(
             ]),
         ),
     };
+    let resize = size.map(|size| size.container).unwrap_or_default();
     let command_override = ContainerOverride::builder()
         .name(container)
         .set_command(Some(command))
+        .set_cpu(resize.cpu.map(|cpu| api_int(cpu.units())))
+        .set_memory(resize.memory.map(|memory| api_int(memory.mib())))
+        .set_memory_reservation(
+            resize
+                .memory_reservation
+                .map(|memory| api_int(memory.mib())),
+        )
         .build();
     client
         .run_task()
@@ -201,8 +214,19 @@ fn run_task_request(
         .overrides(
             TaskOverride::builder()
                 .container_overrides(command_override)
+                .set_cpu(size.map(|size| size.task.cpu.units().to_string()))
+                .set_memory(size.map(|size| size.task.memory.mib().to_string()))
                 .build(),
         )
+}
+
+fn mib_from_api(mib: i32) -> Memory {
+    Memory::from_mib(mib.unsigned_abs())
+}
+
+/// 大きさは Fargate の組み合わせ表で確かめた後なので、i32 に収まる
+fn api_int(value: u32) -> i32 {
+    i32::try_from(value).expect("タスクの大きさが i32 に収まらない")
 }
 
 fn launched_from(output: RunTaskOutput) -> Result<LaunchedTask> {
@@ -310,6 +334,55 @@ pub async fn container_definition(
         })
 }
 
+/// ファミリー名で最新のリビジョン（RunTask が使うもの）を引き、タスクとコンテナの大きさを取る
+pub async fn task_definition_size(
+    client: &Client,
+    task_family: &str,
+    container: &str,
+) -> Result<Definition> {
+    let output = client
+        .describe_task_definition()
+        .task_definition(task_family)
+        .send()
+        .await
+        .with_context(|| format!("DescribeTaskDefinition に失敗しました（{task_family}）"))?;
+    let definition = output.task_definition().with_context(|| {
+        format!("DescribeTaskDefinition の応答にタスク定義 {task_family} がありません")
+    })?;
+    definition_from(definition, container)
+}
+
+fn definition_from(definition: &TaskDefinition, container: &str) -> Result<Definition> {
+    // 未指定の cpu は 0 で返る
+    let limits = |c: &ContainerDefinition| ContainerLimits {
+        name: c.name().unwrap_or("-").to_owned(),
+        cpu: u32::try_from(c.cpu())
+            .ok()
+            .filter(|&units| units > 0)
+            .map(Cpu::from_units),
+        memory: c.memory().map(mib_from_api),
+        memory_reservation: c.memory_reservation().map(mib_from_api),
+    };
+    let (targets, others): (Vec<_>, Vec<_>) = definition
+        .container_definitions()
+        .iter()
+        .partition(|c| c.name() == Some(container));
+    let target = targets.first().with_context(|| {
+        format!(
+            "タスク定義 {} にコンテナ `{container}` がありません",
+            definition.family().unwrap_or("-")
+        )
+    })?;
+    Ok(Definition {
+        size: DefinedSize {
+            cpu: definition.cpu().map(Cpu::from_api).transpose()?,
+            memory: definition.memory().map(Memory::from_api).transpose()?,
+        },
+        container: limits(target),
+        others: others.into_iter().map(limits).collect(),
+    })
+}
+
 /// run が流しているタスクに付くタグ。exec のタスクには付かない
 const MODE_TAG_KEY: &str = "ecsh:mode";
 const RUN_MODE: &str = "run";
@@ -329,6 +402,8 @@ pub struct OwnTask {
     pub started_at: Option<SystemTime>,
     /// run が流しているタスク。接続しないのが正常
     pub is_run: bool,
+    pub cpu: Option<Cpu>,
+    pub memory: Option<Memory>,
 }
 
 /// クラスタで startedBy が `started_by` のタスクを、ListTasks → DescribeTasks で取る
@@ -405,6 +480,8 @@ fn own_task_from(task: &Task) -> Result<OwnTask> {
             .tags()
             .iter()
             .any(|tag| tag.key() == Some(MODE_TAG_KEY) && tag.value() == Some(RUN_MODE)),
+        cpu: task.cpu().map(Cpu::from_api).transpose()?,
+        memory: task.memory().map(Memory::from_api).transpose()?,
     })
 }
 
@@ -420,6 +497,7 @@ mod tests {
     use aws_sdk_ecs::types::{AssignPublicIp, Failure, Service, Tag};
 
     use super::*;
+    use crate::size::{ContainerResize, TaskSize};
 
     const TASK_DEFINITION: &str = "arn:aws:ecs:us-east-1:123456789012:task-definition/worker:42";
 
@@ -541,6 +619,7 @@ mod tests {
             &snapshot(),
             "ecsh/me",
             Workload::Shell,
+            None,
         );
         let input = request.as_input();
 
@@ -566,6 +645,7 @@ mod tests {
             &snapshot(),
             "ecsh/me",
             Workload::Shell,
+            None,
         );
         let input = request.as_input();
 
@@ -582,6 +662,7 @@ mod tests {
             &snapshot(),
             "ecsh/me",
             Workload::Shell,
+            None,
         );
         let overrides = request
             .as_input()
@@ -603,6 +684,7 @@ mod tests {
             &snapshot(),
             "ecsh/me",
             Workload::Command(command),
+            None,
         )
     }
 
@@ -648,11 +730,125 @@ mod tests {
             &snapshot(),
             "ecsh/me",
             Workload::Shell,
+            None,
         );
 
         assert_eq!(run.as_input().get_enable_execute_command(), &Some(false));
         assert_eq!(exec.as_input().get_enable_execute_command(), &Some(true));
         assert_eq!(exec.as_input().get_tags(), &None);
+    }
+
+    fn overrides_of(request: &RunTaskFluentBuilder) -> TaskOverride {
+        request.as_input().get_overrides().clone().unwrap()
+    }
+
+    #[test]
+    fn without_a_size_the_task_and_container_keep_the_task_definition_size() {
+        let overrides = overrides_of(&run_request(&["true".into()]));
+
+        assert_eq!((overrides.cpu(), overrides.memory()), (None, None));
+        let container = &overrides.container_overrides()[0];
+        assert_eq!(
+            (
+                container.cpu(),
+                container.memory(),
+                container.memory_reservation()
+            ),
+            (None, None, None)
+        );
+    }
+
+    #[test]
+    fn size_overrides_the_task_in_cpu_units_and_mib_and_resizes_the_container() {
+        let size = SizeOverride {
+            task: TaskSize {
+                cpu: "2".parse().unwrap(),
+                memory: "8GB".parse().unwrap(),
+            },
+            container: ContainerResize {
+                cpu: Some(Cpu::from_units(2048)),
+                memory: Some(Memory::from_mib(8192)),
+                memory_reservation: None,
+            },
+        };
+        for workload in [Workload::Shell, Workload::Command(&[])] {
+            let request = run_task_request(
+                &offline_client(),
+                "c",
+                "app",
+                &snapshot(),
+                "ecsh/me",
+                workload,
+                Some(&size),
+            );
+            let overrides = overrides_of(&request);
+
+            assert_eq!(overrides.cpu(), Some("2048"), "{workload:?}");
+            assert_eq!(overrides.memory(), Some("8192"), "{workload:?}");
+            let container = &overrides.container_overrides()[0];
+            assert_eq!(container.name(), Some("app"));
+            assert_eq!(container.cpu(), Some(2048));
+            assert_eq!(container.memory(), Some(8192));
+            assert_eq!(container.memory_reservation(), None);
+        }
+    }
+
+    fn container_definition(
+        name: &str,
+    ) -> aws_sdk_ecs::types::builders::ContainerDefinitionBuilder {
+        ContainerDefinition::builder().name(name)
+    }
+
+    #[test]
+    fn task_definition_size_splits_the_profile_container_from_the_sidecars() {
+        let definition = TaskDefinition::builder()
+            .family("worker")
+            .cpu("1024")
+            .memory("2048")
+            .container_definitions(
+                container_definition("log-router")
+                    .memory_reservation(50)
+                    .build(),
+            )
+            .container_definitions(container_definition("app").cpu(512).memory(1536).build())
+            .build();
+
+        assert_eq!(
+            definition_from(&definition, "app").unwrap(),
+            Definition {
+                size: DefinedSize {
+                    cpu: Some(Cpu::from_units(1024)),
+                    memory: Some(Memory::from_mib(2048)),
+                },
+                container: ContainerLimits {
+                    name: "app".into(),
+                    cpu: Some(Cpu::from_units(512)),
+                    memory: Some(Memory::from_mib(1536)),
+                    memory_reservation: None,
+                },
+                others: vec![ContainerLimits {
+                    name: "log-router".into(),
+                    cpu: None,
+                    memory: None,
+                    memory_reservation: Some(Memory::from_mib(50)),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn task_definition_without_a_size_or_the_container_is_handled() {
+        let definition = TaskDefinition::builder()
+            .family("worker")
+            .container_definitions(container_definition("app").build())
+            .build();
+
+        assert_eq!(
+            definition_from(&definition, "app").unwrap().size,
+            DefinedSize::default()
+        );
+        let message = definition_from(&definition, "web").unwrap_err().to_string();
+        assert!(message.contains("`web`"), "{message}");
     }
 
     #[test]
@@ -825,8 +1021,20 @@ mod tests {
                 created_at: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
                 started_at: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_030)),
                 is_run: false,
+                cpu: None,
+                memory: None,
             }]
         );
+    }
+
+    #[test]
+    fn own_task_carries_the_task_size() {
+        let output = described(running_task().cpu("2048").memory("8192").build());
+
+        let task = &own_tasks_from(output).unwrap()[0];
+
+        assert_eq!(task.cpu, Some(Cpu::from_units(2048)));
+        assert_eq!(task.memory, Some(Memory::from_mib(8192)));
     }
 
     #[test]

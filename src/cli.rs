@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+
+use crate::size::{Cpu, Memory, SizeRequest};
 
 /// ECS の使い捨てタスクを起動して入り、抜けたら止める。コマンドを流すこともできる
 #[derive(Debug, Parser)]
@@ -24,6 +26,9 @@ pub enum Command {
         /// 起動前の y/N の確認を省く
         #[arg(short, long)]
         yes: bool,
+
+        #[command(flatten)]
+        size: SizeArgs,
     },
     /// ecsh が起動したタスクのうち、動いているものを一覧する
     Ps {
@@ -60,6 +65,9 @@ pub enum Command {
         #[arg(short, long)]
         detach: bool,
 
+        #[command(flatten)]
+        size: SizeArgs,
+
         /// `--` の後ろに、流すコマンド。シェルを通さず、そのままコンテナのコマンドにする
         #[arg(last = true, value_name = "COMMAND")]
         command: Vec<String>,
@@ -73,6 +81,36 @@ pub enum Command {
         #[arg(long)]
         last: bool,
     },
+}
+
+/// exec / run のタスクの大きさ。何も付けなければタスク定義のまま
+#[derive(Debug, Args)]
+pub struct SizeArgs {
+    /// タスクの大きさ（CPU / メモリ）を一覧から選ぶ。先頭はタスク定義のまま
+    #[arg(long, conflicts_with_all = ["yes", "cpu", "memory"])]
+    size: bool,
+
+    /// タスクの CPU（vCPU）。例: 2、0.5。省略するとタスク定義の値
+    #[arg(long, value_name = "VCPU")]
+    cpu: Option<Cpu>,
+
+    /// タスクのメモリ。例: 8GB、512MB。省略するとタスク定義の値
+    #[arg(long, value_name = "SIZE")]
+    memory: Option<Memory>,
+}
+
+impl SizeArgs {
+    pub fn request(&self) -> SizeRequest {
+        match self {
+            Self { size: true, .. } => SizeRequest::Choose,
+            Self {
+                cpu: None,
+                memory: None,
+                ..
+            } => SizeRequest::Keep,
+            &Self { cpu, memory, .. } => SizeRequest::Custom { cpu, memory },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -170,6 +208,7 @@ mod tests {
                 yes,
                 detach,
                 command,
+                ..
             } => (profile, yes, detach, command),
             command => panic!("run として解釈されない: {command:?}"),
         }
@@ -250,6 +289,80 @@ mod tests {
     #[test]
     fn logs_does_not_accept_open_yet() {
         assert!(Cli::try_parse_from(["ecsh", "logs", "--open"]).is_err());
+    }
+
+    fn size_request(args: &[&str]) -> SizeRequest {
+        match Cli::try_parse_from(args).unwrap().command {
+            Command::Exec { size, .. } | Command::Run { size, .. } => size.request(),
+            command => panic!("exec / run として解釈されない: {command:?}"),
+        }
+    }
+
+    #[test]
+    fn exec_and_run_keep_the_task_definition_size_by_default() {
+        assert_eq!(
+            size_request(&["ecsh", "exec", "staging"]),
+            SizeRequest::Keep
+        );
+        assert_eq!(
+            size_request(&["ecsh", "run", "staging", "--", "true"]),
+            SizeRequest::Keep
+        );
+    }
+
+    #[test]
+    fn size_flag_chooses_from_the_list_on_exec_and_run() {
+        assert_eq!(
+            size_request(&["ecsh", "exec", "--size"]),
+            SizeRequest::Choose
+        );
+        assert_eq!(
+            size_request(&["ecsh", "run", "--size", "--", "true"]),
+            SizeRequest::Choose
+        );
+    }
+
+    #[test]
+    fn cpu_and_memory_are_given_in_human_units_and_either_can_be_omitted() {
+        assert_eq!(
+            size_request(&["ecsh", "exec", "--cpu", "2", "--memory", "8GB"]),
+            SizeRequest::Custom {
+                cpu: Some(Cpu::from_units(2048)),
+                memory: Some(Memory::from_mib(8192)),
+            }
+        );
+        assert_eq!(
+            size_request(&["ecsh", "run", "--memory", "512MB", "--", "true"]),
+            SizeRequest::Custom {
+                cpu: None,
+                memory: Some(Memory::from_mib(512)),
+            }
+        );
+    }
+
+    #[test]
+    fn unreadable_cpu_or_memory_is_rejected_before_anything_runs() {
+        assert!(Cli::try_parse_from(["ecsh", "exec", "--cpu", "two"]).is_err());
+        assert!(Cli::try_parse_from(["ecsh", "exec", "--memory", "8"]).is_err());
+    }
+
+    #[test]
+    fn size_cannot_be_combined_with_yes_cpu_or_memory() {
+        for args in [
+            ["ecsh", "exec", "--size", "-y"].as_slice(),
+            &["ecsh", "exec", "--size", "--cpu", "2"],
+            &["ecsh", "exec", "--size", "--memory", "8GB"],
+            &["ecsh", "run", "--size", "--yes", "--", "true"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn cpu_and_memory_can_be_combined_with_yes() {
+        assert!(
+            Cli::try_parse_from(["ecsh", "exec", "-y", "--cpu", "2", "--memory", "8GB"]).is_ok()
+        );
     }
 
     #[test]

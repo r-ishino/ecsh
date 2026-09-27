@@ -120,6 +120,8 @@ mod tests {
                 created_at: None,
                 started_at: None,
                 is_run: connection == ConnectionState::Run,
+                cpu: None,
+                memory: None,
             },
             connection,
         }
