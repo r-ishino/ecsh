@@ -12,15 +12,27 @@ Doing "launch a one-off task", "wait until exec is available", "get in", and "st
 
 ## Requirements / 必要なもの
 
-Rust (to build), AWS credentials (resolved the same way as the standard AWS SDK), the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) on `PATH`, and the ECS Exec prerequisites (such as the task role's SSM permissions) met for the target service's task definition. `run` needs a few more account settings and permissions; see [docs/run.md](docs/run.md).
+The Rust toolchain to build it (see [Installation](#installation--インストール)), AWS credentials (resolved the same way as the standard AWS SDK), the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) on `PATH`, and the ECS Exec prerequisites (such as the task role's SSM permissions) met for the target service's task definition. `run` needs a few more account settings and permissions; see [docs/run.md](docs/run.md).
 
-ビルドに Rust、AWS の認証情報（AWS SDK の標準と同じ順で解決）、`PATH` 上の Session Manager plugin、対象サービスのタスク定義が ECS Exec の前提（タスクロールの SSM の権限など）を満たしていること。`run` にはアカウントの設定と権限がもう少し要る（[docs/run.md](docs/run.md)）。
+ビルドに Rust のツールチェーン（入れ方は[インストール](#installation--インストール)）、AWS の認証情報（AWS SDK の標準と同じ順で解決）、`PATH` 上の Session Manager plugin、対象サービスのタスク定義が ECS Exec の前提（タスクロールの SSM の権限など）を満たしていること。`run` にはアカウントの設定と権限がもう少し要る（[docs/run.md](docs/run.md)）。
 
 ## Installation / インストール
 
+ecsh is built from source with `cargo`. If you don't have `cargo`, run these from the top on a Mac. Skip the first line if the Xcode Command Line Tools are already installed (it provides the linker), and take the default when the rustup installer asks. Then open a new terminal so that `~/.cargo/bin` is on `PATH`. The first build takes a few minutes.
+
+ecsh は `cargo` でソースからビルドして入れる。`cargo` が無ければ、Mac で上から順に打つ。1 行目は Xcode Command Line Tools（リンカが入る）で、入っていれば要らない。rustup のインストーラに聞かれたら既定のまま進める。終わったら新しいターミナルを開くと `~/.cargo/bin` が `PATH` に入る。初回のビルドには数分かかる。
+
 ```sh
+xcode-select --install                                           # skip if installed / 入っていれば不要
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # rustup (https://rustup.rs)
+# open a new terminal / 新しいターミナルを開く
 cargo install --git https://github.com/r-ishino/ecsh --locked
+ecsh --version
 ```
+
+To update, run the same command again (`cargo install --git https://github.com/r-ishino/ecsh --locked`, no `--force` needed): it rebuilds and replaces ecsh when `main` has new commits, even though the version stays the same, and does nothing if you are up to date. `cargo uninstall ecsh` removes it. Details are in [docs/install.md](docs/install.md).
+
+更新するときも同じコマンド（`cargo install --git https://github.com/r-ishino/ecsh --locked`）を打つ。`--force` は要らない。`main` に新しい commit があれば、バージョンが同じでもビルドし直して入れ替わり、最新なら何もしない。消すときは `cargo uninstall ecsh`。細かいことは [docs/install.md](docs/install.md)。
 
 ## Configuration / 設定
 
