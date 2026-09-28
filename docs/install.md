@@ -4,7 +4,7 @@ ecsh はビルド済みのバイナリを配っていないので、`cargo insta
 
 ## Rust を入れる
 
-- ビルドが ``linker `cc` not found`` などリンカの無いエラーで止まったら、`xcode-select --install` で Xcode Command Line Tools を入れる。入っているかは `xcode-select -p` がパスを出すかで分かる
+- ビルドが ``linker `cc` not found`` で止まったら、`xcode-select --install` を打ってからもう一度 `cargo install` する
 - rustup のインストーラに聞かれたら、既定のまま進めてよい
 - rustup のインストーラは Rust のツールチェーンを `~/.rustup` と `~/.cargo` に入れ、`~/.cargo/bin` を `PATH` に足す設定をシェルの設定ファイルに書く。管理者権限は要らない
 - 設定が効くのは新しく開いたターミナルから。開き直さずに今のターミナルで続けるなら `. "$HOME/.cargo/env"` を打つ
