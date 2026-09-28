@@ -2,266 +2,75 @@
 
 A CLI that launches a one-off task on Amazon ECS, drops you into it with ECS Exec, and stops the task when you exit. It can also run a command as a one-off task and stream its output.
 
-## Why
+Amazon ECS で使い捨てタスクを起動して ECS Exec で入り、抜けたらタスクを止める CLI。コマンドを使い捨てタスクとして流し、出力を見ることもできる。
 
-When you run a batch job or a console by hand for an application on ECS, doing "launch a one-off task", "wait until exec is available", "get in", and "stop it when done" as separate steps leads to the following:
+## Why / なぜ
 
-- Even after the task is RUNNING, you cannot exec into it until the ExecuteCommandAgent has started, so you don't know when you can get in
-- The task keeps running after you exit, and you forget to stop it
-- You might end up in a long-running task that happens to be running in the same cluster
+Doing "launch a one-off task", "wait until exec is available", "get in", and "stop it when done" by hand, you don't know when you can get in (the ExecuteCommandAgent starts after the task is RUNNING), you forget to stop the task, and you might end up in a long-running task in the same cluster. ecsh waits for the agent and gets you in automatically, only ever connects to the task it launched, and stops it when you exit; if ecsh dies, the task stops on its own 12 hours after it starts.
 
-ecsh combines these into a single command:
+「使い捨てタスクを起動する」「exec できるまで待つ」「入る」「終わったら止める」を手でやると、いつ入れるか分からず（ExecuteCommandAgent はタスクが RUNNING になった後に起動する）、止め忘れ、同じクラスタで常駐しているタスクに入ってしまうこともある。ecsh はエージェントを待って自動で入り、自分が起動したタスクにだけつなぎ、抜けたら止める。ecsh が異常終了しても、タスクは起動から 12 時間で自分で止まる。
 
-- It waits for the ExecuteCommandAgent to become RUNNING, then gets you in automatically
-- It only ever connects to the task it launched
-- It stops the task when you exit. In case ecsh terminates abnormally, the task is set to stop on its own 12 hours after it starts
+## Requirements / 必要なもの
 
-## Requirements
+Rust (to build), AWS credentials (resolved the same way as the standard AWS SDK), the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) on `PATH`, and the ECS Exec prerequisites (such as the task role's SSM permissions) met for the target service's task definition. `run` needs a few more account settings and permissions; see [docs/run.md](docs/run.md).
 
-- Rust (to build)
-- AWS credentials (resolved the same way as the standard AWS SDK)
-- [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) on `PATH` (`exec` checks for it before launching anything)
-- ECS Exec enabled on the target ECS service
-- For `run`: the [new ARN and resource ID format](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-account-settings.html#ecs-resource-ids) for tasks enabled in the account (needed to tag a task at launch), and permission for `ecs:TagResource`, `ecs:DescribeTaskDefinition`, and `logs:GetLogEvents`
+ビルドに Rust、AWS の認証情報（AWS SDK の標準と同じ順で解決）、`PATH` 上の Session Manager plugin、対象サービスのタスク定義が ECS Exec の前提（タスクロールの SSM の権限など）を満たしていること。`run` にはアカウントの設定と権限がもう少し要る（[docs/run.md](docs/run.md)）。
 
-## Installation
+## Installation / インストール
 
 ```sh
 cargo install --git https://github.com/r-ishino/ecsh --locked
 ```
 
-## Configuration
+## Configuration / 設定
 
-Put the config at `$XDG_CONFIG_HOME/ecsh/config.toml` (or `~/.config/ecsh/config.toml` if unset). You can point to a different location with `--config <PATH>`.
+Copy [config.example.toml](config.example.toml) to `$XDG_CONFIG_HOME/ecsh/config.toml` (or `~/.config/ecsh/config.toml`) and edit it; `--config <PATH>` points elsewhere. The AWS profile is `AWS_PROFILE`, then `aws_profile` in the config, then the AWS SDK's default.
 
-Copy [config.example.toml](config.example.toml) and edit the values.
+[config.example.toml](config.example.toml) を `$XDG_CONFIG_HOME/ecsh/config.toml`（未設定なら `~/.config/ecsh/config.toml`）にコピーして値を直す。`--config <PATH>` で別の場所を指せる。AWS プロファイルは `AWS_PROFILE` → 設定の `aws_profile` → AWS SDK の既定 の順に決まる。
 
 ```toml
 [profiles.staging]
 region = "us-east-1"
 cluster = "example-staging"
-service = "worker"   # service to copy the network configuration from
-container = "app"    # container to exec into
-aws_profile = "example"  # optional
+service = "worker"       # service to copy the network configuration from / ネットワーク設定を写すサービス
+container = "app"        # container to exec into / 入るコンテナ
+aws_profile = "example"  # optional / 省略可
 ```
 
-The AWS profile is chosen in the following order. `exec` prints the profile it used and where it came from.
+## Usage / 使い方
 
-1. The `AWS_PROFILE` environment variable
-2. `aws_profile` in the config
-3. If neither is set, the AWS SDK's default resolution order
+Each command first lists the profiles in the config (↑↓ and Enter to pick, typing narrows the list, Esc cancels with exit status 1). Details of each command are in Japanese under [docs/](docs/).
 
-## Usage
+各コマンドはまず設定のプロファイルを一覧で出す（↑↓ と Enter で選び、文字を打つと絞り込み、Esc で終了コード 1 でやめる）。各コマンドの細かい挙動は [docs/](docs/) に日本語で書いてある。
 
 ```sh
-ecsh exec          # choose a profile, launch a one-off task and get in; stop it when you exit
-ecsh run -- bundle exec rake db:migrate:status  # choose a profile, run a command as a one-off task and stream its output
-ecsh ps            # choose a profile, list the tasks launched by ecsh that are still running
-ecsh ps --all      # the same, across every profile in the config
-ecsh gc            # choose a profile, then leftover ecsh tasks, and stop them
-ecsh gc --all      # the same, across every profile in the config
-ecsh logs          # choose a profile, then one of your past runs, and show its output
-ecsh logs --last   # show the output of your latest run, whatever the profile
-ecsh open          # choose a profile, then one of your running tasks, and open it in the AWS console
+ecsh exec                                   # launch a task, get in, stop it when you exit / 起動して入り、抜けたら止める
+ecsh run -- bundle exec rake db:migrate:status  # run a command and stream its output / コマンドを流して出力を見る
+ecsh ps                                     # list your running tasks / 動いている自分のタスクを一覧する
+ecsh gc                                     # stop tasks left behind / 残ったタスクを選んで止める
+ecsh logs                                   # show the output of a past run / 過去の run の出力を見る
+ecsh open                                   # open a running task in the AWS console / 動いているタスクを AWS コンソールで開く
+ecsh exec --size                            # change the task size for one launch / 1 回だけタスクの大きさを変える
 ```
 
-Each command starts by showing the profiles in the config as a list, with the cluster and service of each (`--all` and `logs --last` skip it, since they are not about one profile). Pick one with ↑↓ and Enter; typing narrows the list, and Esc cancels with exit status 1. The list cannot be shown when stdin is not a terminal; pass the profile name in that case (see below).
+`ps --all` and `gc --all` go through every profile, and `logs --last` opens your latest run whatever the profile; these skip the profile list. See [exec](docs/exec.md), [run](docs/run.md), [ps](docs/ps.md), [gc](docs/gc.md), [logs](docs/logs.md), [open](docs/open.md), and [task size](docs/size.md).
 
-### Passing the profile name
+`ps --all` と `gc --all` は全プロファイルを回り、`logs --last` はプロファイルを問わず直近の run を開く。これらはプロファイルの一覧を出さない。詳しくは [exec](docs/exec.md)・[run](docs/run.md)・[ps](docs/ps.md)・[gc](docs/gc.md)・[logs](docs/logs.md)・[open](docs/open.md)・[タスクの大きさ](docs/size.md)。
 
-You can put the profile name right after the command. It skips the profile list, which is also how to use ecsh when stdin is not a terminal, such as from a script, where it is often combined with `--yes` (`-y`):
+### Passing the profile name / プロファイル名を渡す
+
+Put the profile name right after the command to skip the profile list. This is how to use ecsh when stdin is not a terminal, such as from a script, often with `--yes` (`-y`) to skip the y/N prompt before launching. The name cannot be combined with `--all`.
+
+コマンドの直後にプロファイル名を置くと、プロファイルの一覧を飛ばせる。スクリプトなど stdin がターミナルでないときはこの形で使い、起動前の y/N を省く `--yes`（`-y`）と組み合わせることが多い。名前は `--all` と併用できない。
 
 ```sh
-ecsh exec staging
-ecsh exec staging --cpu 2 --memory 8GB -y        # --cpu / --memory work with -y (see Task size)
-ecsh run -y staging -- bundle exec rake db:migrate:status
+ecsh exec staging --cpu 2 --memory 8GB -y
 ecsh run -y -d staging -- bundle exec rake users:import
-ecsh ps staging
-ecsh gc staging --yes                            # stop the left-behind and unknown tasks without the checklist
-ecsh logs staging                                # choose from the runs of staging
-ecsh logs staging --last                         # open the latest run of staging
-ecsh open staging
+ecsh gc staging --yes
+ecsh logs staging --last
 ```
 
-The name cannot be combined with `--all`. The rest of this README omits the name; everything works the same with it.
-
-### exec
-
-`exec` starts `/bin/sh` in the container, with the profile name in the prompt (`[staging] /app # `). When you exit the shell, ecsh stops the task. Even if the session ends abnormally (for example, the connection drops), ecsh still stops the task and exits with 0 as long as stopping succeeds; it only prints the session's exit status.
-
-`exec` prints its progress to stderr (in Japanese). It looks roughly like this:
-
-```
-> プロファイルを選んでください staging  example-staging / worker
-
-  staging  →  example-staging / worker / app
-  AWS  example（設定の aws_profile）· us-east-1
-  ネットワーク  subnet-01234567… · sg-01234567… · パブリック IP なし
-
-staging（cluster=example-staging service=worker）で使い捨てタスクを起動します。よろしいですか？ [y/N] y
-✓ タスクを起動しました  0123abcd（worker:42）
-  12 時間後に自動で止まります · startedBy ecsh/alice
-✓ 入れるようになりました（45 秒）
-  exit で抜けるとタスクを止めます
-
-[staging] /app # exit
-✓ タスクを止めました  0123abcd（入っていた時間 12 分）
-```
-
-The task is shown by the first 8 characters of its ID and the task definition by `family:revision`; the full task ARN is printed only when you may need to stop the task yourself. While waiting to get in, a single spinner line shows the elapsed time and the task / agent status. Errors are shown as a one-line summary marked with `✗`, followed by what to do (if any) and the underlying causes. If an AWS call fails because the AWS SSO session has expired, ecsh tells you to run `aws sso login` with the AWS profile it resolved.
-
-When stderr is not a terminal, or the `NO_COLOR` environment variable is set, ecsh prints no colors or spinner; while waiting, it prints one line each time the status changes.
-
-Signals after the task has been launched:
-
-- Ctrl-C, closing the terminal (SIGHUP), or SIGTERM while waiting to get in stops the task, then exits
-- Ctrl-C during the session goes to the command running in the container and does not end ecsh. Closing the terminal or SIGTERM ends the session, stops the task, then exits
-- Pressing Ctrl-C again while ecsh is stopping the task after a signal exits without waiting. The task may be left running; stop it with `ecsh gc`
-
-Before the task is launched, Ctrl-C simply exits.
-
-`exec` always asks y/N before launching the task, for every profile. Anything other than `y` or `yes` cancels the launch. `--yes` (`-y`) skips the prompt. When stdin is not a terminal and `--yes` is not given, it fails with an error instead of launching.
-
-While `exec` is in a task, it holds an exclusive lock on `sessions/<task ID>.lock` under the state directory (`$XDG_STATE_HOME/ecsh`, or `~/.local/state/ecsh` when `XDG_STATE_HOME` is unset), and removes the file when it exits. This marks the task as in use from this machine. If the file cannot be created, `exec` prints a warning and carries on.
-
-### ps
-
-`ps` lists your tasks (`startedBy = ecsh/$USER`) in the profile's cluster that have not been told to stop. The table goes to stdout, so you can pipe it; notes and warnings go to stderr, as does the profile list. It looks roughly like this:
-
-```
-> プロファイルを選んでください staging  example-staging / worker
-ID        接続      状態     起動から     タスク定義  CPU     メモリ  自動停止まで
-0123abcd  接続中    RUNNING  12 分        worker:42   1 vCPU  2 GB    11 時間 48 分
-89abcdef  止め忘れ  RUNNING  2 時間 5 分  worker:42   2 vCPU  8 GB    9 時間 55 分
-```
-
-- 接続 (connection) is 接続中 when `exec` on this machine is in the task, 止め忘れ (left behind) when its lock file remains but no `exec` holds it, 不明 (unknown) when there is no lock file (launched from another machine or by an older ecsh), and run for tasks that run a command and are not meant to be connected to
-- CPU and メモリ (memory) are the task's size, including a size overridden at launch (see [Task size](#task-size))
-- 起動から is the time since the task was launched; 自動停止まで is the time left until the 12-hour limit, counted from when the task started (─ while it is pending, and for run tasks)
-- Left-behind tasks are shown in yellow, followed by a hint to stop them with `ecsh gc` (the hint names the profile). For unknown tasks, 起動から turns yellow after 1 hour and red after 2 hours
-- With no tasks, `ps` prints a line to stderr and exits with 0
-
-`ps --all` goes through every profile in parallel and adds a profile column. Profiles that point to the same region, cluster, and AWS profile are asked only once, under the name that comes first. A profile that fails (for example, an expired SSO session) is reported on stderr and skipped; `ps --all` fails only when every profile fails. When every profile succeeds, `ps --all` also removes lock files that no `exec` holds and whose tasks are no longer running.
-
-### gc
-
-`gc` stops the tasks ecsh left behind, for example after ecsh was killed with `kill -9`, the machine lost power, or StopTask failed (they stop on their own after 12 hours anyway). It looks at the same tasks as `ps` and shows them as a checklist on stderr:
-
-- 止め忘れ (left behind) and 不明 (unknown) tasks are checked from the start; run tasks are listed unchecked, so they are stopped only when you check them yourself
-- Tasks that `exec` on this machine is in (接続中) are not listed; `gc` prints how many were left out
-- Each item shows the task ID, the connection, the time since launch, and the task definition. Toggle items with Space and press Enter to stop the checked ones. Pressing Enter with nothing checked, or Esc, cancels with exit status 1
-- With no tasks to list, `gc` says so and exits with 0
-
-`gc` stops the tasks one by one with the reason `ecsh gc`, without waiting for them to reach STOPPED, and prints `✓` or `✗` for each. If some of them fail, it still tries the rest and exits with 1 at the end. It also removes the lock files of the tasks it stopped.
-
-`--yes` (`-y`) skips the checklist and stops the left-behind and unknown tasks; it never stops run tasks. It does not skip the profile list; name the profile or use `--all` to run it without one. When stdin is not a terminal and `--yes` is not given, `gc` fails with an error without stopping anything.
-
-`gc --all` goes through every profile the same way as `ps --all` and puts all tasks in one checklist, with the profile name at the start of each item. `gc --all --yes` works too, which suits periodic cleanup: it leaves tasks in use and run tasks alone. As with `ps --all`, when every profile succeeds it also removes lock files that no `exec` holds and whose tasks are no longer running.
-
-All of `gc`'s output goes to stderr.
-
-### run
-
-`ecsh run -- <command...>` asks for a profile, then launches a one-off task whose container command is the command after `--`. The arguments are passed as they are, without a shell, so the command becomes the container's main process and receives the SIGTERM that StopTask sends. The task stops by itself when the command ends; there is no time limit. The network configuration and the other launch settings are copied from the service, the same as `exec`.
-
-```sh
-ecsh run -- bundle exec rake db:migrate:status
-ecsh run -- bundle exec rake 'users:import[2026-09-01,dry]'  # quote [ ] (zsh expands them)
-ecsh run -- bundle exec rake users:import LIMIT=10           # rake takes KEY=VALUE as environment variables
-ecsh run -- env LIMIT=10 bin/import                          # otherwise, use env
-ecsh run -- sh -c 'bin/prepare && bundle exec rake users:import'
-ecsh run -d -- bundle exec rake users:import                 # launch it and leave
-```
-
-When you need `&&`, pipes, or other shell syntax, wrap the command in `sh -c` yourself. In that case the shell is the main process and does not pass SIGTERM on to the command, so stopping the task kills the command without letting it clean up (after the stop timeout).
-
-`run` asks y/N before launching, the same as `exec` (`--yes` / `-y` skips it). Running `ecsh run` without a command launches nothing and points you to `ecsh exec`; it says so before asking for a profile.
-
-By default, `run` waits for the command to finish:
-
-- The command's output goes to stdout, read from CloudWatch Logs. ecsh finds the log group and stream from the container's `awslogs` log configuration in the task definition (`awslogs-group` and `awslogs-stream-prefix` are needed). Progress and results go to stderr
-- When the task stops, ecsh prints the rest of the output and exits with the command's exit code, along with the time taken. If the command has no exit code (for example, the task failed to start), ecsh prints why the task stopped and exits with 1
-- If the container does not use `awslogs`, ecsh prints a warning and only waits for the task to stop
-
-`--detach` (`-d`) launches the task and exits with 0, printing the task ID and pointing you to `ecsh logs` to read the output later.
-
-Signals while `run` is waiting:
-
-- Ctrl-C stops the output and asks whether to stop the task. `y` stops the task, waits until it has stopped, and exits with 130. `N` or Enter leaves the task running to the end and exits with 130
-- Ctrl-C again while it is asking leaves the task running. Ctrl-C while ecsh is waiting for the task to stop exits without waiting
-- Closing the terminal (SIGHUP), SIGTERM, and Ctrl-C when stdin is not a terminal leave the task running and exit with 128 + the signal number
-
-Each `run` is recorded in the history that `ecsh logs` reads (see below). If the history cannot be written, `run` prints a warning and carries on; `-d` and leaving without stopping then point you to the AWS console instead of `ecsh logs`.
-
-A task launched by `run` has `startedBy = ecsh/$USER` like `exec`, and the tag `ecsh:mode = run`. `ps` shows it as run, and `gc` lists it unchecked, so a runaway command can be stopped by checking it there.
-
-### logs
-
-`ecsh logs` shows the output of a command you ran with `run` on this machine.
-
-```sh
-ecsh logs         # choose a profile, then a run from its history
-ecsh logs --last  # open the latest run right away, whatever the profile
-```
-
-`logs` first asks for a profile, the same as the other commands, then lists that profile's runs, newest first, with the launch time, the result (終了 <exit code>, or 未確認 when ecsh has not seen the task stop), the time taken, and the command. Pick one with ↑↓ and Enter (Esc cancels with exit status 1). The list cannot be shown when stdin is not a terminal; use `--last` in that case. With no runs to show, `logs` says so and exits with 0.
-
-- A run that has finished: its whole output goes to stdout, followed by its exit code and time taken on stderr
-- A run that is still going: the output is streamed the same way as when `run` waits, and the exit code is shown when the task stops. Ctrl-C (or closing the terminal, or SIGTERM) only stops watching; the task keeps running, and `logs` exits with 128 + the signal number
-- A run launched with `-d` or left without stopping has no exit code in the history yet. `logs` asks ECS (DescribeTasks) and records the result when the task has stopped. ECS forgets stopped tasks after a while; the exit code is then shown as unknown
-- If the log stream no longer exists (for example, the log group's retention period has passed), `logs` says the output is gone
-
-`logs` exits with 0 once it has shown the run, whatever the command's exit code.
-
-`--open` opens the run's log stream in the CloudWatch Logs console in your browser instead of printing its output (`ecsh logs --open`, `ecsh logs --last --open`). It works for finished runs too, as long as the log stream is still kept. See [open](#open) for how the browser is opened.
-
-The history lives in `history.jsonl` under the state directory (the same directory as `sessions/`). `run` adds a line each time it launches a task and records the exit code and time taken once it sees the task stop. Only the latest 100 runs are kept. `exec` is not recorded, since its task only runs `sleep`. Only runs launched from this machine are listed.
-
-### open
-
-`ecsh open` opens one of your running tasks in the AWS console in your browser.
-
-```sh
-ecsh open         # choose a profile, a task, then the task details or its logs
-ecsh open --logs  # skip the last choice and open the logs (CloudWatch Logs)
-ecsh open --task  # skip the last choice and open the task details (ECS)
-```
-
-`open` first asks for a profile, the same as the other commands, then lists the same tasks as `ps` with the task ID, the connection, the status, the time since launch, and the task definition. With a single task, the list is skipped; with none, `open` says so and exits with 0.
-
-For a run task, `open` then asks whether to open the task details or the logs. A task launched by `exec` only runs `sleep`, so its logs are empty: `open` goes straight to the task details, and `--logs` is an error. When the container does not use `awslogs` (with `awslogs-group` and `awslogs-stream-prefix`), the logs cannot be opened: `open` goes to the task details, and `--logs` is an error. The lists cannot be shown when stdin is not a terminal; pass the profile name (see [Passing the profile name](#passing-the-profile-name)), and `--task` or `--logs` for a run task. With more than one task, `open` fails in that case.
-
-`open` prints the URL to stderr and passes it to macOS's `open` command, which opens it in your default browser. Only running tasks are listed; to open the logs of a run that has finished, use `ecsh logs --open`.
-
-The browser uses its own AWS console sign-in, which ecsh cannot switch. If the browser is signed in to a different AWS account, the console says the task or log group is not found; sign in to the account of the profile and open the URL again.
-
-### Task size
-
-By default, `exec` and `run` launch the task with the CPU and memory of the task definition. To change them for one launch, pick a size from a list:
-
-```sh
-ecsh exec --size   # choose the profile, then the size
-ecsh run --size -- bundle exec rake users:import
-```
-
-The list starts with "タスク定義のまま" (keep the task definition's size, shown with its current value), so Enter launches without changing anything. The other entries are 0.5 vCPU / 1 GB, 1 vCPU / 2 GB, 1 vCPU / 4 GB, 2 vCPU / 4 GB, 2 vCPU / 8 GB, 4 vCPU / 8 GB, and 4 vCPU / 16 GB. The list is built in and cannot be changed in the config.
-
-For a size that is not on the list, give it directly with `--cpu` (in vCPU, such as `2` or `0.5`) and `--memory` (with a unit, such as `8GB` or `512MB`; 1 GB = 1024 MiB):
-
-```sh
-ecsh exec --cpu 2 --memory 8GB
-ecsh run --memory 4GB -- bundle exec rake users:import       # the CPU stays as in the task definition
-```
-
-If you give only one of them, the other comes from the task definition. The combination is checked against the CPU and memory values Fargate supports before the task is launched, and a combination Fargate does not support is rejected with the allowed memory range for that CPU. `--cpu` / `--memory` can be combined with `-y`.
-
-`--size` shows a list, so it cannot be combined with `-y`; it cannot be combined with `--cpu` / `--memory` either. It also needs stdin to be a terminal.
-
-The chosen size is shown before the y/N prompt and in the prompt itself. If it is the same as the task definition, nothing is overridden. Changing the size needs permission for `ecs:DescribeTaskDefinition`.
-
-If the task definition sets `memory` (the hard limit), `memoryReservation`, or `cpu` on the container in the profile, ecsh adjusts those values of that container to fit the new task size: the hard limit and `cpu` become the task's value minus what the other containers in the task (sidecars) set, and `memoryReservation` is lowered only when it no longer fits. Without this, a larger task would still be capped by the container's old hard limit, and a smaller task would be rejected because the containers would not fit. The other containers are left as they are. If the sidecars alone do not fit in the new size, ecsh fails before launching the task.
-
-## Development
+## Development / 開発
 
 ```sh
 cargo build
