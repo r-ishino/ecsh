@@ -30,9 +30,9 @@ cargo install --git https://github.com/r-ishino/ecsh --locked
 ecsh --version
 ```
 
-To update, run the same `cargo install` again: it rebuilds and replaces ecsh when `main` has new commits, even though the version stays the same, and does nothing if you are up to date. `cargo uninstall ecsh` removes it. Details are in [docs/install.md](docs/install.md).
+To update, run the same command again (`cargo install --git https://github.com/r-ishino/ecsh --locked`, no `--force` needed): it rebuilds and replaces ecsh when `main` has new commits, even though the version stays the same, and does nothing if you are up to date. `cargo uninstall ecsh` removes it. Details are in [docs/install.md](docs/install.md).
 
-更新は同じ `cargo install` をもう一度打つ。`main` に新しい commit があれば、バージョンが同じでもビルドし直して入れ替わり、最新なら何もしない。消すときは `cargo uninstall ecsh`。細かいことは [docs/install.md](docs/install.md)。
+更新するときも同じコマンド（`cargo install --git https://github.com/r-ishino/ecsh --locked`）を打つ。`--force` は要らない。`main` に新しい commit があれば、バージョンが同じでもビルドし直して入れ替わり、最新なら何もしない。消すときは `cargo uninstall ecsh`。細かいことは [docs/install.md](docs/install.md)。
 
 ## Configuration / 設定
 
