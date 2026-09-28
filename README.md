@@ -18,21 +18,21 @@ The Rust toolchain to build it (see [Installation](#installation--インスト�
 
 ## Installation / インストール
 
-ecsh is built from source with `cargo`. If you don't have `cargo`, run these from the top on a Mac. Skip the first line if the Xcode Command Line Tools are already installed (it provides the linker), and take the default when the rustup installer asks. Then open a new terminal so that `~/.cargo/bin` is on `PATH`. The first build takes a few minutes.
+If you don't have `cargo`, install Rust first and open a new terminal.
 
-ecsh は `cargo` でソースからビルドして入れる。`cargo` が無ければ、Mac で上から順に打つ。1 行目は Xcode Command Line Tools（リンカが入る）で、入っていれば要らない。rustup のインストーラに聞かれたら既定のまま進める。終わったら新しいターミナルを開くと `~/.cargo/bin` が `PATH` に入る。初回のビルドには数分かかる。
+`cargo` が無ければ、先に Rust を入れて新しいターミナルを開く。
 
 ```sh
-xcode-select --install                                           # skip if installed / 入っていれば不要
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # rustup (https://rustup.rs)
-# open a new terminal / 新しいターミナルを開く
-cargo install --git https://github.com/r-ishino/ecsh --locked
-ecsh --version
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-To update, run the same command again (`cargo install --git https://github.com/r-ishino/ecsh --locked`, no `--force` needed): it rebuilds and replaces ecsh when `main` has new commits, even though the version stays the same, and does nothing if you are up to date. `cargo uninstall ecsh` removes it. Details are in [docs/install.md](docs/install.md).
+Then install ecsh. Run the same command to update. See [docs/install.md](docs/install.md) if it fails.
 
-更新するときも同じコマンド（`cargo install --git https://github.com/r-ishino/ecsh --locked`）を打つ。`--force` は要らない。`main` に新しい commit があれば、バージョンが同じでもビルドし直して入れ替わり、最新なら何もしない。消すときは `cargo uninstall ecsh`。細かいことは [docs/install.md](docs/install.md)。
+ecsh を入れる。更新も同じコマンド。うまくいかないときは [docs/install.md](docs/install.md)。
+
+```sh
+cargo install --git https://github.com/r-ishino/ecsh --locked
+```
 
 ## Configuration / 設定
 
